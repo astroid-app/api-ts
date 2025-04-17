@@ -1,0 +1,34 @@
+{
+  "name": "apijs",
+  "version": "0.1.0",
+  "description": "Astroid API for modifying and getting Endpoints",
+  "main": "index.js",
+  "scripts": {
+    "start": "tsc src/index.ts && node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Deutscher 775",
+  "license": "AGPL-3.0",
+  "dependencies": {
+    "@sentry/node": "^9.8.0",
+    "@types/express": "^5.0.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "fastify": "^3.29.5",
+    "fastify-cors": "^6.0.3",
+    "fs": "^0.0.1-security",
+    "image-js": "^0.36.0",
+    "imagejs": "^0.0.9",
+    "mysql2": "^3.14.0",
+    "path": "^0.12.7",
+    "pg": "^8.14.1",
+    "sentry": "^0.1.2",
+    "surrealdb": "^1.2.1",
+    "typescript": "^5.8.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/node": "^22.13.12"
+  }
+}
