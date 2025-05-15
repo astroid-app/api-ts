@@ -1,9 +1,9 @@
 export interface Endpoint {
-    config: Config;
-    meta: Meta;
-  }
+  config: Config;
+  meta: Meta;
+}
   
-  export interface Config {
+export interface Config {
   "allowed-ids": string[];
   blacklist: string[];
   channels: Channels;
