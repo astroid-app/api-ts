@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import dotenv from 'dotenv';
+import * as dotenv from 'dotenv';
 
 export async function getDb(): Promise<Client> {
     // Create a new PostgreSQL client instance
