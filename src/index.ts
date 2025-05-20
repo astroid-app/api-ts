@@ -11,6 +11,7 @@ import {
 } from "./UpdateEndpointConfig";
 import { validateConfig } from "./types/ConfigKeys";
 import cors = require("cors");
+import { roundStatistics } from "./statistics";
 
 // Initialize dotenv
 dotenv.config();
@@ -98,6 +99,17 @@ app.get("/", (req: Request, res: Response) => {
 	res.status(200).json(homeData);
 });
 
+app.get("/statistics", async (req: Request, res: Response): Promise<any> => {
+
+	try {
+		const stats = await roundStatistics();
+		res.status(200).json(stats);
+	} catch (err) {
+		console.error(err);
+		res.status(500).send({ message: "Internal Server Error", status: 500 });
+	}
+});
+
 app.get("/:id", async (req: Request, res: Response): Promise<any> => {
 	const endpointId = req.params.id;
 
@@ -171,6 +183,7 @@ app.post("/:id/config", async (req: Request, res: Response): Promise<any> => {
 		res.status(500).send({ message: "Internal Server Error", status: 500 });
 	}
 });
+
 
 app.delete("/:id/config", async (req: Request, res: Response): Promise<any> => {
 	const endpointId = req.params.id;
