@@ -12,6 +12,7 @@ import {
 import { validateConfig } from "./types/ConfigKeys";
 import cors = require("cors");
 import { roundStatistics } from "./statistics";
+import { is_suspended } from "./suspension_handler";
 
 // Initialize dotenv
 dotenv.config();
@@ -125,6 +126,16 @@ app.get("/:id", async (req: Request, res: Response): Promise<any> => {
 			.status(401)
 			.send({ message: "Unauthorized: Invalid token", status: 401 });
 	}
+	is_suspended(endpointId)
+		.then((suspended) => {
+			if (suspended) {
+				return res
+					.status(403)
+					.send({ message: "Forbidden: Endpoint is suspended", status: 403 });
+			}
+		})
+		.catch((err) => {});
+		
 	getEndpoint(endpointId)
 		.then((endpoint) => {
 			if (endpoint) {
@@ -154,6 +165,16 @@ app.post("/:id/config", async (req: Request, res: Response): Promise<any> => {
 			.status(401)
 			.send({ message: "Unauthorized: Invalid token", status: 401 });
 	}
+
+	is_suspended(endpointId)
+	.then((suspended) => {
+		if (suspended) {
+			return res
+				.status(403)
+				.send({ message: "Forbidden: Endpoint is suspended", status: 403 });
+		}
+	})
+	.catch((err) => {});
 
 	const newConfig = req.body;
 	if (!newConfig) {
@@ -199,6 +220,16 @@ app.delete("/:id/config", async (req: Request, res: Response): Promise<any> => {
 			.status(401)
 			.send({ message: "Unauthorized: Invalid token", status: 401 });
 	}
+	is_suspended(endpointId)
+	.then((suspended) => {
+		if (suspended) {
+			return res
+				.status(403)
+				.send({ message: "Forbidden: Endpoint is suspended", status: 403 });
+		}
+	})
+	.catch((err) => {});
+	
 	const newConfig = req.body;
 	if (!newConfig) {
 		return res
