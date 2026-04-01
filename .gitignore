@@ -2,3 +2,10 @@
 .env
 *.js
 src/tmp.py
+/dist
+/logs
+/src/TMP_attachments
+src/dbdata.json
+/.vscode
+package-lock.json
+start.sh

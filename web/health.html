@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Astroid API · System Health</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              'dark-bg': '#0d1117',
+              'dark-card': '#161b22',
+              'dark-elevated': '#21262d',
+              'dark-border': '#30363d',
+              'dark-text': '#e6edf3',
+              'dark-text-secondary': '#8b949e',
+              'dark-text-muted': '#6e7681',
+              'status-success': '#22c55e',
+              'status-warning': '#eab308',
+              'status-danger': '#ef4444',
+              'status-unknown': '#6b7280',
+              'accent-blue': '#3b82f6',
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+      body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+      
+      @keyframes pulse-green {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+        50% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+      }
+      @keyframes pulse-yellow {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); }
+        50% { box-shadow: 0 0 0 8px rgba(234, 179, 8, 0); }
+      }
+      @keyframes pulse-red {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+        50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+      }
+      .status-dot.healthy { animation: pulse-green 2s infinite; }
+      .status-dot.degraded { animation: pulse-yellow 2s infinite; }
+      .status-dot.down { animation: pulse-red 1s infinite; }
+      
+      /* Chart container enhancements */
+      #latencyChart {
+        width: 100% !important;
+        height: 100% !important;
+      }
+      
+      /* Scrollbar styling for webkit browsers */
+      .scrollbar-thin::-webkit-scrollbar {
+        width: 6px;
+      }
+      .scrollbar-thin::-webkit-scrollbar-track {
+        background: #21262d;
+      }
+      .scrollbar-thin::-webkit-scrollbar-thumb {
+        background: #30363d;
+        border-radius: 3px;
+      }
+      .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+        background: #484f58;
+      }
+    </style>
+  </head>
+  <body class="bg-dark-bg text-dark-text antialiased min-h-screen">
+    <div class="max-w-7xl mx-auto p-6">
+      <header class="mb-8 pb-6 border-b border-dark-border">
+        <h1 class="text-3xl font-semibold mb-2 flex items-center gap-3 flex-wrap">
+          <span>System Health</span>
+          <span id="systemStatus" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm bg-dark-text-muted/10 text-dark-text-secondary">
+            <span class="w-2.5 h-2.5 rounded-full bg-dark-text-secondary"></span>
+            Checking...
+          </span>
+        </h1>
+        <div class="text-sm text-dark-text-secondary">Real-time monitoring of Astroid API services and infrastructure</div>
+      </header>
+
+      <!-- Services Section -->
+      <section class="bg-dark-card border border-dark-border rounded-lg p-5 mb-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide">Services</h2>
+          <div class="text-xs text-dark-text-muted">Auto-refresh every 30s</div>
+        </div>
+        <div id="services"></div>
+      </section>
+
+      <!-- Metrics Grid -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-5">
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">Uptime</div>
+          <div id="uptime" class="text-4xl font-bold mb-1 text-dark-text">--</div>
+          <div class="text-sm text-dark-text-secondary">seconds</div>
+        </div>
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">Total Requests</div>
+          <div id="requests" class="text-4xl font-bold mb-1 text-dark-text">0</div>
+          <div class="text-sm text-dark-text-secondary">since startup</div>
+        </div>
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">Messages Enqueued</div>
+          <div id="enqueued" class="text-4xl font-bold mb-1 text-dark-text">0</div>
+          <div class="text-sm text-dark-text-secondary">total</div>
+        </div>
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">Messages Processed</div>
+          <div id="processed" class="text-4xl font-bold mb-1 text-dark-text">0</div>
+          <div class="text-sm text-dark-text-secondary">total</div>
+        </div>
+      </div>
+
+      <!-- Additional Metrics -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-5">
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">Queue Size</div>
+          <div id="queueSize" class="text-4xl font-bold mb-1 text-dark-text">0</div>
+          <div class="text-sm text-dark-text-secondary">messages pending</div>
+        </div>
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">Active Endpoints</div>
+          <div id="activeEndpoints" class="text-4xl font-bold mb-1 text-dark-text">0</div>
+          <div class="text-sm text-dark-text-secondary">with work</div>
+        </div>
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">DB Latency</div>
+          <div id="avgLatency" class="text-4xl font-bold mb-1 text-dark-text">--</div>
+          <div class="text-sm text-dark-text-secondary">average ms</div>
+        </div>
+        <div class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+          <div class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide mb-3">Auth Failures</div>
+          <div id="authFailures" class="text-4xl font-bold mb-1 text-dark-text">0</div>
+          <div class="text-sm text-dark-text-secondary">authentication errors</div>
+        </div>
+      </div>
+
+      <!-- Latency Chart -->
+      <section class="bg-dark-card border border-dark-border rounded-lg p-5 mb-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide">Service Latency</h2>
+            <div class="text-xs text-dark-text-muted">Real-time response times</div>
+          </div>
+          <button id="pingButton" class="px-4 py-2 bg-accent-blue/20 hover:bg-accent-blue/30 text-accent-blue border border-accent-blue/30 rounded-lg text-xs font-medium transition-all duration-200 hover:shadow-md hover:shadow-accent-blue/20 focus:outline-none focus:ring-2 focus:ring-accent-blue/50">
+            🏓 Ping Now
+          </button>
+        </div>
+        <div class="bg-dark-elevated rounded-md p-4 relative" style="height: 400px;">
+          <canvas id="latencyChart"></canvas>
+          <div id="emptyChartMessage" class="absolute inset-0 flex items-center justify-center text-dark-text-muted text-sm hidden">
+            <div class="text-center">
+              <div class="mb-2">📊</div>
+              <div>Collecting database latency data...</div>
+              <div class="text-xs mt-1">Chart will appear once ping tests are completed</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Event Log -->
+      <section class="bg-dark-card border border-dark-border rounded-lg p-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide">Recent Events</h2>
+          <div class="text-xs text-dark-text-muted">Live stream via SSE</div>
+        </div>
+        <div id="eventLog" class="bg-dark-elevated rounded-md p-4 max-h-96 overflow-y-auto font-mono text-xs leading-relaxed scrollbar-thin scrollbar-thumb-dark-border scrollbar-track-dark-elevated"></div>
+      </section>
+    </div>
+
+    <script>
+      const $ = (sel) => document.querySelector(sel);
+
+      // Chart configuration and data storage
+      let latencyChart;
+      const chartData = {
+        labels: [],
+        datasets: []
+      };
+      const MAX_DATA_POINTS = 50;
+      const serviceColors = {
+        'database_pg': '#3b82f6',      // blue
+        'database_surreal': '#FF00A0', // pink
+        'queue_processor': '#f59e0b',  // amber
+        'message_distribution': '#ef4444' // red
+      };
+
+      function formatUptime(seconds) {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${s}s`;
+        return `${s}s`;
+      }
+
+      function formatLatency(ms) {
+        if (!ms && ms !== 0) return '--';
+        return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(2)}s`;
+      }
+
+      function initChart() {
+        const ctx = document.getElementById('latencyChart');
+        Chart.defaults.color = '#8b949e';
+        Chart.defaults.borderColor = '#30363d';
+        
+        latencyChart = new Chart(ctx, {
+          type: 'line',
+          data: chartData,
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: true,
+                position: 'top',
+                labels: {
+                  color: '#e6edf3',
+                  usePointStyle: true,
+                  padding: 20,
+                  font: {
+                    size: 12,
+                    family: 'Inter'
+                  }
+                }
+              },
+              tooltip: {
+                backgroundColor: 'rgba(33, 38, 45, 0.95)',
+                titleColor: '#e6edf3',
+                bodyColor: '#8b949e',
+                borderColor: '#30363d',
+                borderWidth: 1,
+                cornerRadius: 8,
+                displayColors: true,
+                callbacks: {
+                  label: function(context) {
+                    return `${context.dataset.label}: ${context.parsed.y}ms`;
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                display: true,
+                title: {
+                  display: true,
+                  text: 'Time (max: last 15 minutes)',
+                  color: '#8b949e',
+                  font: {
+                    size: 12,
+                    family: 'Inter'
+                  }
+                },
+                ticks: {
+                  color: '#6e7681',
+                  maxTicksLimit: 10,
+                  font: {
+                    size: 10,
+                    family: 'Inter'
+                  }
+                },
+                grid: {
+                  color: '#21262d',
+                  drawBorder: false
+                }
+              },
+              y: {
+                display: true,
+                title: {
+                  display: true,
+                  text: 'Latency (ms)',
+                  color: '#8b949e',
+                  font: {
+                    size: 12,
+                    family: 'Inter'
+                  }
+                },
+                ticks: {
+                  color: '#6e7681',
+                  font: {
+                    size: 10,
+                    family: 'Inter'
+                  }
+                },
+                grid: {
+                  color: '#21262d',
+                  drawBorder: false
+                },
+                beginAtZero: true
+              }
+            },
+            interaction: {
+              intersect: false,
+              mode: 'index'
+            },
+            elements: {
+              line: {
+                borderWidth: 2,
+                fill: false,
+                tension: 0.3
+              },
+              point: {
+                radius: 3,
+                hoverRadius: 6,
+                borderWidth: 2,
+                backgroundColor: '#161b22'
+              }
+            },
+            animation: {
+              duration: 750,
+              easing: 'easeInOutQuart'
+            }
+          }
+        });
+      }
+
+      function initializeChartWithHistory(latencyHistory) {
+        if (!latencyHistory || latencyHistory.length === 0) {
+          // Show empty state message in chart
+          showEmptyChartState();
+          return;
+        }
+        
+        // Clear existing data
+        chartData.labels = [];
+        chartData.datasets = [];
+        
+        // Only include database services
+        const databaseServices = ['database_pg', 'database_surreal'];
+        
+        // Check if we have any actual data
+        const hasData = latencyHistory.some(dataPoint => 
+          Object.keys(dataPoint.services).some(serviceKey => 
+            databaseServices.includes(serviceKey) && dataPoint.services[serviceKey] !== undefined
+          )
+        );
+        
+        if (!hasData) {
+          showEmptyChartState();
+          return;
+        }
+        
+        // We have data, hide empty state
+        hideEmptyChartState();
+        
+        // Process historical data
+        latencyHistory.forEach(dataPoint => {
+          const time = new Date(dataPoint.timestamp);
+          const timeLabel = time.toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' });
+          chartData.labels.push(timeLabel);
+          
+          // Create or update datasets only for database services with data
+          Object.entries(dataPoint.services).forEach(([serviceKey, latencyMs]) => {
+            // Skip if not a database service or no latency data
+            if (!databaseServices.includes(serviceKey) || latencyMs === undefined || latencyMs === null) {
+              return;
+            }
+            
+            const serviceName = getServiceName(serviceKey);
+            let dataset = chartData.datasets.find(ds => ds.serviceKey === serviceKey);
+            
+            if (!dataset) {
+              dataset = {
+                label: serviceName,
+                serviceKey: serviceKey,
+                data: [],
+                borderColor: serviceColors[serviceKey] || '#6b7280',
+                backgroundColor: serviceColors[serviceKey] || '#6b7280',
+                pointBackgroundColor: '#161b22',
+                pointBorderColor: serviceColors[serviceKey] || '#6b7280'
+              };
+              chartData.datasets.push(dataset);
+            }
+            
+            dataset.data.push(latencyMs);
+          });
+        });
+        
+        // Update the chart with historical data
+        if (latencyChart) {
+          latencyChart.update();
+        }
+      }
+
+      function showEmptyChartState() {
+        // Clear chart and show empty state message
+        chartData.labels = [];
+        chartData.datasets = [];
+        
+        // Show empty message
+        const message = $('#emptyChartMessage');
+        const canvas = $('#latencyChart');
+        if (message && canvas) {
+          message.classList.remove('hidden');
+          canvas.style.opacity = '0.3';
+        }
+        
+        if (latencyChart) {
+          latencyChart.update();
+        }
+      }
+
+      function hideEmptyChartState() {
+        // Hide empty message and show chart
+        const message = $('#emptyChartMessage');
+        const canvas = $('#latencyChart');
+        if (message && canvas) {
+          message.classList.add('hidden');
+          canvas.style.opacity = '1';
+        }
+      }
+      
+      function getServiceName(serviceKey) {
+        const serviceNames = {
+          'database_pg': 'PostgreSQL',
+          'database_surreal': 'SurrealDB', 
+          'queue_processor': 'Queue Processor',
+          'message_distribution': 'Message Distribution'
+        };
+        return serviceNames[serviceKey] || serviceKey;
+      }
+
+      function updateChart(services) {
+        const now = new Date();
+        const timeLabel = now.toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' });
+        
+        // Only include database services
+        const databaseServices = ['database_pg', 'database_surreal'];
+        
+        // Check if we have any database services with latency data
+        const hasValidData = Object.entries(services).some(([serviceKey, service]) => 
+          databaseServices.includes(serviceKey) && service.latencyMs !== undefined
+        );
+        
+        if (!hasValidData) {
+          return; // Don't update chart if no database latency data
+        }
+        
+        // We have valid data, make sure empty state is hidden
+        hideEmptyChartState();
+        
+        // Add new time label
+        chartData.labels.push(timeLabel);
+        if (chartData.labels.length > MAX_DATA_POINTS) {
+          chartData.labels.shift();
+        }
+
+        // Update or create datasets only for database services
+        Object.entries(services).forEach(([serviceKey, service]) => {
+          if (databaseServices.includes(serviceKey) && service.latencyMs !== undefined) {
+            let dataset = chartData.datasets.find(ds => ds.serviceKey === serviceKey);
+            
+            if (!dataset) {
+              // Create new dataset for this database service
+              dataset = {
+                label: service.name,
+                serviceKey: serviceKey,
+                data: [],
+                borderColor: serviceColors[serviceKey] || '#6b7280',
+                backgroundColor: serviceColors[serviceKey] || '#6b7280',
+                pointBackgroundColor: '#161b22',
+                pointBorderColor: serviceColors[serviceKey] || '#6b7280'
+              };
+              chartData.datasets.push(dataset);
+            }
+            
+            // Add new data point
+            dataset.data.push(service.latencyMs);
+            if (dataset.data.length > MAX_DATA_POINTS) {
+              dataset.data.shift();
+            }
+          }
+        });
+
+        // Update the chart
+        if (latencyChart) {
+          latencyChart.update('none'); // No animation for real-time updates
+        }
+      }
+
+      function getSystemStatus(services) {
+        const statuses = Object.values(services).map(s => s.status);
+        if (statuses.some(s => s === 'down')) return 'down';
+        if (statuses.some(s => s === 'degraded')) return 'degraded';
+        if (statuses.every(s => s === 'healthy')) return 'healthy';
+        return 'unknown';
+      }
+
+      function renderServices(services) {
+        const container = $('#services');
+        const statusColors = {
+          healthy: 'bg-status-success/15 text-status-success',
+          degraded: 'bg-status-warning/15 text-status-warning',
+          down: 'bg-status-danger/15 text-status-danger',
+          unknown: 'bg-status-unknown/15 text-status-unknown'
+        };
+        const dotColors = {
+          healthy: 'bg-status-success',
+          degraded: 'bg-status-warning',
+          down: 'bg-status-danger',
+          unknown: 'bg-status-unknown'
+        };
+        const html = Object.entries(services).map(([key, service]) => `
+          <div class="bg-dark-elevated rounded-md p-4 mb-3 last:mb-0 transition-all duration-200 hover:bg-dark-elevated/80">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-base font-medium text-dark-text">${service.name}</span>
+              <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium ${statusColors[service.status]}">
+                <span class="status-dot w-2.5 h-2.5 rounded-full ${dotColors[service.status]} ${service.status}"></span>
+                ${service.status.toUpperCase()}
+              </span>
+            </div>
+            <div class="flex gap-4 text-xs text-dark-text-muted flex-wrap">
+              ${service.latencyMs !== undefined ? `
+                <div class="flex items-center gap-1.5">
+                  <span>⚡</span>
+                  <span>${formatLatency(service.latencyMs)}</span>
+                </div>
+              ` : ''}
+              ${service.error ? `
+                <div class="flex items-center gap-1.5 text-status-danger">
+                  <span>⚠</span>
+                  <span class="truncate max-w-xs">${service.error.substring(0, 40)}..</span>
+                </div>
+              ` : ''}
+              ${service.metadata ? `
+                <div class="flex items-center gap-1.5">
+                  <span class="truncate max-w-xs">${Object.entries(service.metadata).map(([k,v]) => `${k}: ${v}`).join(', ')}</span>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        `).join('');
+        container.innerHTML = html;
+
+        // Update system status
+        const systemStatus = getSystemStatus(services);
+        const badge = $('#systemStatus');
+        const statusConfig = {
+          healthy: { bg: 'bg-status-success/15', text: 'text-status-success', dot: 'bg-status-success', label: 'All Systems Operational' },
+          degraded: { bg: 'bg-status-warning/15', text: 'text-status-warning', dot: 'bg-status-warning', label: 'Degraded Performance' },
+          down: { bg: 'bg-status-danger/15', text: 'text-status-danger', dot: 'bg-status-danger', label: 'Service Disruption' },
+          unknown: { bg: 'bg-status-unknown/15', text: 'text-status-unknown', dot: 'bg-status-unknown', label: 'Status Unknown' }
+        };
+        const config = statusConfig[systemStatus];
+        badge.className = `inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm ${config.bg} ${config.text}`;
+        badge.innerHTML = `
+          <span class="status-dot w-2.5 h-2.5 rounded-full ${config.dot} ${systemStatus}"></span>
+          ${config.label}
+        `;
+
+        // Chart update is now handled in renderSummary
+      }
+
+      let isChartInitialized = false;
+
+      function renderSummary(data) {
+        const c = data.counters || {};
+        $('#uptime').textContent = formatUptime(data.uptimeSec || 0);
+        $('#requests').textContent = (c.requests_total || 0).toLocaleString();
+        $('#enqueued').textContent = (c.messages_enqueued || 0).toLocaleString();
+        $('#processed').textContent = (c.messages_processed || 0).toLocaleString();
+        $('#queueSize').textContent = (c.messages_in_queue || 0).toLocaleString();
+        $('#activeEndpoints').textContent = (c.active_endpoints_with_work || 0).toLocaleString();
+        $('#authFailures').textContent = (c.auth_failures || 0).toLocaleString();
+
+        // Initialize chart with historical data on first load
+        if (!isChartInitialized && data.latencyHistory && data.latencyHistory.length > 0) {
+          initializeChartWithHistory(data.latencyHistory);
+          isChartInitialized = true;
+        } else if (isChartInitialized && data.services) {
+          // Update chart with current data only if already initialized
+          updateChart(data.services);
+        }
+
+        // Calculate and display average latency (only for database services)
+        if (data.services) {
+          const databaseServices = ['database_pg', 'database_surreal'];
+          const databaseLatencies = Object.entries(data.services)
+            .filter(([serviceKey, service]) => 
+              databaseServices.includes(serviceKey) && service.latencyMs !== undefined
+            )
+            .map(([, service]) => service.latencyMs);
+          
+          if (databaseLatencies.length > 0) {
+            let latencies = []
+            const allLatencies = data.latencyHistory;
+            for (const entry of allLatencies) {
+              for (const [serviceKey, serviceLatency] of Object.entries(entry.services)) {
+                if (databaseServices.includes(serviceKey) && serviceLatency !== undefined) {
+                  latencies.push(serviceLatency);
+                }
+              }
+            }
+            const avgLatency = Math.round(latencies.reduce((sum, latency) => sum + latency, 0) / latencies.length);
+            $('#avgLatency').textContent = `${avgLatency}ms`;
+            
+            // Color code the average latency
+            const avgElement = $('#avgLatency');
+            if (avgLatency < 150) {
+              avgElement.className = 'text-4xl font-bold mb-1 text-status-success';
+            } else if (avgLatency < 300) {
+              avgElement.className = 'text-4xl font-bold mb-1 text-status-warning';
+            } else {
+              avgElement.className = 'text-4xl font-bold mb-1 text-status-danger';
+            }
+          } else {
+            $('#avgLatency').textContent = '--';
+            $('#avgLatency').className = 'text-4xl font-bold mb-1 text-dark-text';
+          }
+          
+          // Only call renderServices, not updateChart (handled above)
+          renderServices(data.services);
+        }
+      }
+
+      function appendEvent(ev) {
+        const log = $('#eventLog');
+        const time = new Date(ev.time).toLocaleTimeString();
+        const line = document.createElement('div');
+        line.className = 'flex gap-3 py-1.5 border-b border-white/5 last:border-b-0 hover:bg-dark-bg/50 transition-colors duration-150';
+        line.innerHTML = `
+          <span class="text-dark-text-muted whitespace-nowrap">${time}</span>
+          <span class="text-accent-blue min-w-[120px]">${ev.type}</span>
+          <span class="text-dark-text-secondary flex-1">${ev.message}</span>
+        `;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+
+        // Keep only last 100 events in DOM
+        while (log.children.length > 100) {
+          log.removeChild(log.firstChild);
+        }
+      }
+
+      async function triggerPingTest() {
+        const button = $('#pingButton');
+        const originalText = button.textContent;
+        button.textContent = '🔄 Pinging...';
+        button.disabled = true;
+        
+        try {
+          const res = await fetch(location.origin + '/health/ping', {
+            method: 'POST'
+          });
+          const result = await res.json();
+          
+          if (result.success) {
+            button.textContent = '✅ Pinged!';
+            setTimeout(() => {
+              button.textContent = originalText;
+              button.disabled = false;
+            }, 2000);
+          } else {
+            throw new Error(result.error);
+          }
+        } catch (e) {
+          console.error('Ping test failed:', e);
+          button.textContent = '❌ Failed';
+          setTimeout(() => {
+            button.textContent = originalText;
+            button.disabled = false;
+          }, 2000);
+        }
+      }
+
+      async function bootstrap() {
+        const base = location.origin;
+
+        // Initialize chart
+        initChart();
+
+        // Setup ping button
+        $('#pingButton').addEventListener('click', triggerPingTest);
+
+        // Initial load
+        try {
+          const res = await fetch(base + '/health');
+          const data = await res.json();
+          renderSummary(data);
+        } catch (e) {
+          console.error('Failed to fetch health data:', e);
+        }
+
+        try {
+          const res = await fetch(base + '/health/events?limit=50');
+          const events = await res.json();
+          events.forEach(ev => appendEvent(ev));
+        } catch (e) {
+          console.error('Failed to fetch events:', e);
+        }
+
+        // SSE stream
+        const es = new EventSource(base + '/health/stream');
+        
+        es.addEventListener('snapshot', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            renderSummary(data);
+          } catch (err) {
+            console.error('Error parsing snapshot:', err);
+          }
+        });
+
+        es.addEventListener('heartbeat', () => {
+          // Keep-alive
+        });
+
+        es.onmessage = (e) => {
+          try {
+            const ev = JSON.parse(e.data);
+            appendEvent(ev);
+          } catch (err) {
+            console.error('Error parsing event:', err);
+          }
+        };
+
+        es.onerror = () => {
+          appendEvent({
+            time: new Date().toISOString(),
+            type: 'system',
+            message: 'SSE connection error - reconnecting...'
+          });
+        };
+      }
+
+      bootstrap();
+    </script>
+  </body>
+</html>

@@ -1,12 +1,13 @@
 import { getDb } from "./utils/pgsql";
 import { Config } from "./types/Endpoint";
 import { console } from "inspector";
+import log from "./utils/logger";
 
 type NestedKeyValue = { path: string[]; value: any };
 
 function flattenObject(obj: any, prefix: string[] = []): NestedKeyValue[] {
   const entries: NestedKeyValue[] = [];
-
+  
   for (const [key, value] of Object.entries(obj)) {
     const path = [...prefix, key];
     if (value !== null && typeof value === "object" && !Array.isArray(value)) {
@@ -20,19 +21,19 @@ function flattenObject(obj: any, prefix: string[] = []): NestedKeyValue[] {
 }
 
 export async function updateEndpointConfig(
-  endpointId: string,
+  endpointId: bigint,
   newConfig: Partial<Config>
 ): Promise<Config | undefined> {
   const client = await getDb();
   if (!client) {
-    console.error("Database not initialized");
+    log("ERROR", "Database not initialized");
     return undefined;
   }
 
   try {
     const updates = flattenObject({ config: newConfig });
-    console.debug("Updates to be made:", updates);
-    const values: any[] = [endpointId];
+    log("DEBUG", "Updates to be made:", updates);
+    const values: any[] = [endpointId.toString()];
 
     let baseExpr = "data";
 
@@ -71,29 +72,28 @@ export async function updateEndpointConfig(
     console.error("Error executing update for:", endpointId);
     throw err;
   } finally {
-    await client.end();
+    await client.release();
   }
 }
 
 export async function removeArrayItemFromConfig(
-  endpointId: string,
+  endpointId: bigint,
   removeConfig: Partial<Config>
 ): Promise<Config | undefined> {
   const client = await getDb();
   if (!client) {
-    console.error("Database not initialized");
+    log("ERROR", "Database not initialized");
     return undefined;
   }
 
   try {
     const updates = flattenObject({ config: removeConfig });
-    console.debug("Removes to be made:", updates);
+    log("DEBUG", "Removes to be made:", updates);
     let baseExpr = "data";
-    const values: any[] = [endpointId];
-    console.debug("Base expression:", baseExpr);
-    console.debug("Values:", values);
+    const values: any[] = [endpointId.toString()];
+    log("DEBUG", "Base expression:", baseExpr);
+    log("DEBUG", "Values:", values);
 
-    // Build nested jsonb_set calls
     for (let i = updates.length - 1; i >= 0; i--) {
       const { path, value } = updates[i];
       const paramIndex = values.length + 1;
@@ -101,9 +101,8 @@ export async function removeArrayItemFromConfig(
       if (!Array.isArray(value)) continue;
 
       values.push(JSON.stringify(value));
-      console.debug("Value to remove:", value);
+      log("DEBUG", "Value to remove:", value);
 
-      // Construct SQL to filter array
       const pathStr = path.join(",");
       const fullPathStr = `{${pathStr}}`;
 
@@ -132,9 +131,9 @@ export async function removeArrayItemFromConfig(
 
     return result.rows[0].data.config as Config;
   } catch (err) {
-    console.error("Error removing items from array for:", endpointId);
+    log("ERROR", "Error removing items from array for:", endpointId);
     throw err;
   } finally {
-    await client.end();
+    await client.release();
   }
 }

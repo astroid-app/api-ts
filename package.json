@@ -4,7 +4,8 @@
   "description": "Astroid API for modifying and getting Endpoints",
   "main": "index.js",
   "scripts": {
-    "start": "tsc src/index.ts && node src/index.js",
+    "build": "node ./node_modules/typescript/bin/tsc --outDir ./dist",
+    "start": "node ./node_modules/typescript/bin/tsc --outDir ./dist && node ./dist/index.js -p",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Deutscher 775",
@@ -12,12 +13,16 @@
   "dependencies": {
     "@sentry/node": "^9.8.0",
     "@types/express": "^5.0.1",
+    "axios": "^1.10.0",
     "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "discord.js": "^14.20.0",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
     "fastify": "^3.29.5",
     "fastify-cors": "^6.0.3",
     "fs": "^0.0.1-security",
+    "guilded.js": "^0.25.0",
     "image-js": "^0.36.0",
     "imagejs": "^0.0.9",
     "mysql2": "^3.14.0",
@@ -30,6 +35,6 @@
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/node": "^22.13.12",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.3"
   }
 }

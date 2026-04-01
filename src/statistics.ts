@@ -4,36 +4,45 @@ import { RecordId, jsonify} from "surrealdb";
 export async function roundStatistics(): Promise<any> {
 
     const db = await getDb();
-    const result = await db.select(new RecordId("statistics", "messages"));
-    const endpointResult = await db.select("endpoints");
-    const jsonEndpointResult = jsonify(endpointResult);
-    const jsonresult = jsonify(result); 
-    const totalMessages = jsonresult.total as number;
-    const monthlyMasages = jsonresult.month as number;
+    try {
+        const result = await db.select(new RecordId("statistics", "messages"));
+        const endpointResult = await db.select("endpoints");
+        const jsonEndpointResult = jsonify(endpointResult) as any[];
+        const jsonresult = jsonify(result) as Record<string, any>;
 
-    const totalMessagesRounded = round(totalMessages);
-    const monthlyMasagesRounded = round(monthlyMasages);
+        const totalMessages = Number(jsonresult?.total ?? 0);
+        const monthlyMasages = Number(jsonresult?.month ?? 0);
 
-    const endpoints = jsonEndpointResult.length;
+        const totalMessagesRounded = round(totalMessages);
+        const monthlyMasagesRounded = round(monthlyMasages);
 
-    // object construction for return
-    const stats = {
-        messages: {
-            id: jsonresult.id,
-            month: monthlyMasages,
-            periodStart: jsonresult.periodStart,
-            total: totalMessages,
-            total_rounded: totalMessagesRounded,
-            month_rounded: monthlyMasagesRounded
-        },
-        endpoints: endpoints
-    };
+        const endpoints = Array.isArray(jsonEndpointResult)
+            ? jsonEndpointResult.length
+            : 0;
 
-    return stats;
+        const stats = {
+            messages: {
+                id: jsonresult?.id ?? "statistics:messages",
+                month: monthlyMasages,
+                periodStart: jsonresult?.periodStart ?? null,
+                total: totalMessages,
+                total_rounded: totalMessagesRounded,
+                month_rounded: monthlyMasagesRounded
+            },
+            endpoints: endpoints
+        };
+
+        return stats;
+    } finally {
+        await db.close();
+    }
 }
 
-// This function rounds a number based on its magnitude.
 function round(value: number): number {
+    if (!Number.isFinite(value) || value <= 0) {
+        return 0;
+    }
+
     let roundLimit = 2;
     const digits = Math.floor(Math.log10(value)) + 1;
 

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Astroid Log-Konsole</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      background: #181818;
+      color: #e0e0e0;
+      font-family: 'Fira Mono', 'Consolas', 'Menlo', monospace;
+      margin: 0;
+      padding: 0;
+    }
+    .console {
+      padding: 24px;
+      margin: 32px auto;
+      width: 90%;
+      min-height: 500px;
+      overflow-y: auto;
+      font-size: 1rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .log-ERROR { color: #ff4c4c; }
+    .log-WARN { color: #ffd700; }
+    .log-SUCCESS { color: #4cff4c; }
+    .log-API_REQUEST { color: #00e6e6; }
+    .log-INFO { color: #00bfff; }
+    .log-DEBUG { color: #c678dd; }
+    .log-LOG { color: #4c8cff; }
+    .timestamp { color: #888; }
+    .level { font-weight: bold; }
+    .console-title {
+      font-size: 1.3rem;
+      color: #fff;
+      margin-bottom: 16px;
+      letter-spacing: 2px;
+    }
+
+    .to-bottom-button {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #444;
+      color: #fff;
+      padding: 10px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="console">
+    <div class="console-title">Astroid Log-Konsole</div>
+    <div id="log-output">Lade Logs ...</div>
+  </div>
+  <div class="to-bottom-button" style="position: fixed; bottom: 20px; right: 20px; background: #444; color: #fff; padding: 10px; border-radius: 5px; cursor: pointer;">
+    Nach unten scrollen
+  </div>
+  <script>
+    const logOutput = document.getElementById('log-output');
+    let isScrolledToBottom = true;
+
+    // Check if user is scrolled to the bottom
+    window.addEventListener('scroll', () => {
+        const isAtBottom = (window.innerHeight + window.scrollY) >= document.body.offsetHeight - 20;
+        isScrolledToBottom = isAtBottom;
+    }, { passive: true });
+
+    function scrollToBottom() {
+        if (isScrolledToBottom) {
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' });
+        }
+    }
+
+    document.querySelector('.to-bottom-button').addEventListener('click', () => {
+      window.scrollTo({
+        top: document.body.scrollHeight,
+        behavior: 'smooth'
+      });
+    });
+
+    function renderLogLine(line) {
+        let level = '';
+        if (line.includes('[ERROR]')) level = 'ERROR';
+        else if (line.includes('[WARN]')) level = 'WARN';
+        else if (line.includes('[SUCCESS]')) level = 'SUCCESS';
+        else if (line.includes('[API_REQUEST]')) level = 'API_REQUEST';
+        else if (line.includes('[INFO]')) level = 'INFO';
+        else if (line.includes('[DEBUG]')) level = 'DEBUG';
+        else if (line.includes('[LOG]')) level = 'LOG';
+
+        // Hide log stream requests
+        if (line.includes('GET /logs/stream?token=') || line.includes('GET /logs?token=')) {
+            return null;
+        }
+
+        // Extract and format parts of the log line
+        const tsMatch = line.match(/\[(\d{4}-\d{2}-\d{2}T[^\]]+)\]/);
+        let ts = tsMatch ? `<span class='timestamp'>[${tsMatch[1]}]</span>` : '';
+        let rest = line.replace(/\[(\d{4}-\d{2}-\d{2}T[^\]]+)\]/, '');
+        
+        const lvlMatch = rest.match(/\[(\w+)\]/);
+        let lvl = lvlMatch ? `<span class='level'>[${lvlMatch[1]}]</span>` : '';
+        rest = rest.replace(/\[(\w+)\]/, '').trim();
+
+        const div = document.createElement('div');
+        div.className = `log-${level || 'LOG'}`;
+        div.innerHTML = `${ts} ${lvl} <span style='color:#fff;'>${rest}</span>`;
+        return div;
+    }
+
+    function connectToLogStream() {
+        const token = window.localStorage.getItem('log_token');
+        if (!token) {
+            const newToken = prompt('Log-Token eingeben:');
+            if (newToken) {
+                window.localStorage.setItem('log_token', newToken);
+                connectToLogStream(); // Retry connection
+            } else {
+                logOutput.textContent = 'Kein Log-Token vorhanden. Bitte die Seite neu laden und ein Token eingeben.';
+            }
+            return;
+        }
+
+        logOutput.innerHTML = 'Verbinde mit Log-Stream...';
+        const eventSource = new EventSource(`/logs/stream?token=${encodeURIComponent(token)}`);
+        let initialLoad = true;
+
+        eventSource.onopen = () => {
+            console.log("Log stream connected.");
+            if (initialLoad) {
+                logOutput.innerHTML = ''; // Clear "Connecting..." message
+                initialLoad = false;
+            }
+        };
+
+        eventSource.addEventListener('log', (event) => {
+            try {
+                const line = JSON.parse(event.data);
+                const logElement = renderLogLine(line);
+                if (logElement) {
+                    logOutput.appendChild(logElement);
+                    scrollToBottom();
+                }
+            } catch (e) {
+                console.error("Failed to parse log event:", e);
+            }
+        });
+
+        eventSource.onerror = (err) => {
+            console.error("EventSource failed:", err);
+            logOutput.innerHTML += "<div class='log-ERROR'>Verbindung zum Log-Stream verloren. Versuche in 5 Sekunden erneut...</div>";
+            eventSource.close();
+            setTimeout(connectToLogStream, 5000);
+        };
+    }
+
+    connectToLogStream();
+  </script>
+</body>
+</html>
+<!DOCTYPE html>

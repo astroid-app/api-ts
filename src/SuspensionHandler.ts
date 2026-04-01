@@ -3,17 +3,7 @@ import { StringRecordId, jsonify, r} from "surrealdb";
 import Surreal from "surrealdb";
 import { DEFAULT_CONFIG, DEFAULT_AUTH } from "./utils/surrealdb";
 
-////tests
-//get_suspend_data("188563418570031104").then((result) => {console.log(result);}).catch((err) => {console.error(err);});
-//is_suspended("1232").then((result) => {console.log(result);}).catch((err) => {console.error(err);});
-//suspend("1232", "test", "test", 1).then((result) => {console.log(result);}).catch((err) => {console.error(err);});
-//test()
-//unsuspend("1232")
-//async function test() {console.log(await get_suspend_data("1232"));}
-
-///////////
-
-export async function is_suspended(endpoint_id:String): Promise<boolean> {
+export async function is_suspended(endpoint_id: bigint): Promise<boolean> {
 
     const endpoint = await get_suspend_data(endpoint_id);
 
@@ -38,11 +28,11 @@ export async function is_suspended(endpoint_id:String): Promise<boolean> {
     return true
 }
 
-export async function suspend(endpoint_id:String, reason:String, suspended_by:String, expireInDays?:number) {
+export async function suspend(endpoint_id: bigint, reason: string, suspended_by: string, expireInDays?: number) {
     const suspendedAt = new Date();
 
     const suspension: any = {
-        id: endpoint_id,
+        id: endpoint_id.toString(),
         reason: reason,
         suspended: true,
         suspendedAt: suspendedAt.toISOString(),
@@ -61,10 +51,10 @@ export async function suspend(endpoint_id:String, reason:String, suspended_by:St
 
 }
 
-export async function unsuspend(endpoint_id:String) {
+export async function unsuspend(endpoint_id: bigint) {
     try {
         const db = await connectToDatabase();
-        await db.merge(new StringRecordId(`suspensions:⟨${endpoint_id}⟩`), {
+        await db.merge(new StringRecordId(`suspensions:⟨${endpoint_id.toString()}⟩`), {
             suspended: false,
         });
     }catch (err) {}
@@ -86,10 +76,10 @@ async function connectToDatabase(): Promise<any> {
     }catch (err) {}
 }
 
-async function get_suspend_data(endpoint_id:String): Promise<any> {
+async function get_suspend_data(endpoint_id: bigint): Promise<any> {
     try {
     const db = await getDb();
-    const result = await db.select(new StringRecordId(`suspensions:⟨${endpoint_id}⟩`));
+    const result = await db.select(new StringRecordId(`suspensions:⟨${endpoint_id.toString()}⟩`));
     const jsonresult = jsonify(result);
     return jsonresult;
     

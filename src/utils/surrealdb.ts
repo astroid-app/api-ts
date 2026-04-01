@@ -1,6 +1,6 @@
 import Surreal from "surrealdb";
 import * as dotenv from "dotenv";
-
+import log from "./logger";
 dotenv.config();
 
 // Define the database configuration interface
@@ -56,7 +56,7 @@ export async function getDb(config: DbConfig = DEFAULT_CONFIG): Promise<Surreal>
     await db.use({ namespace: config.namespace, database: config.database });
     return db;
   } catch (err) {
-    console.error("Failed to connect to SurrealDB:", err instanceof Error ? err.message : String(err));
+    log("ERROR", "Failed to connect to SurrealDB:", err instanceof Error ? err.message : String(err));
     await db.close();
     throw err;
   }
@@ -74,12 +74,11 @@ export async function getTokenDb(config: DbConfig = TOKEN_CONFIG): Promise<Surre
         password: TOKEN_AUTH.password,
       }
     };
-    console.log("Connecting to token database:", config.url, auth);
     await db.connect(config.url, auth);
     await db.use({ namespace: config.namespace, database: config.database });
     return db;
   } catch (err) {
-    console.error("Failed to connect to SurrealDB:", err instanceof Error ? err.message : String(err));
+    log("ERROR", "Failed to connect to SurrealDB:", err instanceof Error ? err.message : String(err));
     await db.close();
     throw err;
   }
