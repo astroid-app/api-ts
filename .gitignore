@@ -9,3 +9,4 @@ src/dbdata.json
 /.vscode
 package-lock.json
 start.sh
+package-lock.json

@@ -1056,7 +1056,14 @@ app.get("/channel/name/:platform", async (req: Request, res: Response): Promise<
 				headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
 			});
 			if (!response.ok) {
-				return res.status(404).json({ message: "This channel does not exist." });
+				const beta_response = await fetch(`https://discord.com/api/v10/channels/${id}`, {
+					headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
+				});
+				if (!beta_response.ok) {
+					return res.status(404).json({ message: "This channel does not exist." });
+				}
+				const body = (await beta_response.json()) as { name?: string };
+				return res.status(200).json(body.name || null);
 			}
 			const body = (await response.json()) as { name?: string };
 			return res.status(200).json(body.name || null);
@@ -1065,10 +1072,59 @@ app.get("/channel/name/:platform", async (req: Request, res: Response): Promise<
 		}
 	}
 
-	if (["guilded", "revolt", "nerimity"].includes(platform)) {
-		return res.status(501).json({ message: "Channel lookup for this platform is not implemented yet." });
+	if (platform === "nerimity") {
+		if (!process.env.NERIMITY_TOKEN) {
+			return res.status(500).json({ message: "NERIMITY_TOKEN is not configured." });
+		}
+		try {
+			const response = await fetch(`https://nerimity.com/api/channels/${id}`, {
+				headers: { Authorization: `${process.env.NERIMITY_TOKEN}` },
+			});
+			if (!response.ok) {
+				const beta_response = await fetch(`https://nerimity.com/api/channels/${id}`, {
+					headers: { Authorization: `${process.env.BETA_NERIMITY_TOKEN}` },
+				});
+				if (!beta_response.ok) {
+					return res.status(404).json({ message: "This channel does not exist." });
+				}
+				const body = (await beta_response.json()) as { name?: string };
+
+				return res.status(200).json(body.name || null);
+			}
+			const body = (await response.json()) as { name?: string };
+			return res.status(200).json(body.name || null);
+		} catch (e) {
+			console.error("Error fetching channel name:", e);
+			return res.status(404).json({ message: "This channel does not exist." });
+		}
 	}
 
+	if (platform === "revolt") {
+		if (!process.env.REVOLT_TOKEN) {
+			return res.status(500).json({ message: "REVOLT_TOKEN is not configured." });
+		}
+		try {
+			const response = await fetch(`https://api.revolt.chat/channels/${id}`, {
+				headers: { "X-Bot-Token": `${process.env.REVOLT_TOKEN}` },
+			});
+			if (!response.ok) {
+				const beta_response = await fetch(`https://api.revolt.chat/channels/${id}`, {
+					headers: { "X-Bot-Token": `${process.env.BETA_REVOLT_TOKEN}` },
+				});
+				if (!beta_response.ok) {
+					return res.status(404).json({ message: "This channel does not exist." });
+				}
+				const body = (await beta_response.json()) as { name?: string };
+				return res.status(200).json(body.name || null);
+			}
+			const body = (await response.json()) as { name?: string };
+			return res.status(200).json(body.name || null);
+		} catch {
+			return res.status(404).json({ message: "This channel does not exist." });
+		}
+	}
+
+	// If the platform is not recognized, return a 404 error
 	return res.status(404).json({ message: "This platform does not exist." });
 });
 
