@@ -64,13 +64,18 @@ export async function getEndpointByPlatform(
 	}
 	try {
 		log("DEBUG", `Fetching endpoint for platform: ${platform} and serverid: ${serverid}`);
-		let result = await client.query(`SELECT discord FROM ${platform}_servers:${serverid}`);
+		let result = await client.query(`SELECT discord FROM ${platform}_servers:⟨${serverid}⟩`);
+		console.log("DEBUG", "Raw result from SurrealDB:", result);
 		if (result.length === 0) {
 			log("ERROR", `No endpoint found for platform: ${platform} and serverid: ${serverid}`);
 			return undefined;
 		}
 		result = jsonify(result[0]) as any;
-		return result[0]
+		const row: any = result[0];
+		if (row && typeof row.discord === "bigint") {
+			row.discord = row.discord.toString();
+		}
+		return row;
 	} catch (err) {
 		log("ERROR", "Error executing query:", err);
 		return undefined;
