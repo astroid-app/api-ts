@@ -477,7 +477,7 @@ app.get("/invite/:platform", (req: Request, res: Response): void => {
 		res.redirect("https://nerimity.com/bot/1570083353837875200?perms=202");
 		return;
 	}
-	if (platform === "nerimity-beta") {
+	if (platform === "nerimity-beta" && token && betaTokens.has(token)) {
 		res.redirect("https://nerimity.com/bot/1528027197628129280?perms=202");
 		return;
 	}
