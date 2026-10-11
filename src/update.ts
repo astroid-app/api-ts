@@ -45,15 +45,23 @@ function parseDiff(raw: string): DiffEntry[] {
 		});
 }
 
+export type UpdateOptions = {
+	// Overwrite files that have local changes instead of skipping them.
+	// Excluded config files are still never touched.
+	force?: boolean;
+};
+
 export type UpdateResult = {
 	upToDate: boolean;
 	updated: string[];
 	deleted: string[];
 	skippedExcluded: string[];
 	skippedLocalChanges: string[];
+	forcedOverLocalChanges: string[];
 };
 
-export async function runUpdate(): Promise<UpdateResult> {
+export async function runUpdate(options: UpdateOptions = {}): Promise<UpdateResult> {
+	const { force = false } = options;
 	const branch = getCurrentBranch();
 	log("INFO", `Fetching latest changes from ${REPO_URL} (${REMOTE}/${branch})`);
 	git(["fetch", REMOTE, branch]);
@@ -63,7 +71,14 @@ export async function runUpdate(): Promise<UpdateResult> {
 
 	if (currentHead === remoteHead) {
 		log("INFO", "Already up to date.");
-		return { upToDate: true, updated: [], deleted: [], skippedExcluded: [], skippedLocalChanges: [] };
+		return {
+			upToDate: true,
+			updated: [],
+			deleted: [],
+			skippedExcluded: [],
+			skippedLocalChanges: [],
+			forcedOverLocalChanges: [],
+		};
 	}
 
 	const diff = parseDiff(
@@ -74,21 +89,30 @@ export async function runUpdate(): Promise<UpdateResult> {
 	const deleted: string[] = [];
 	const skippedExcluded: string[] = [];
 	const skippedLocalChanges: string[] = [];
+	const forcedOverLocalChanges: string[] = [];
 
 	for (const { status, file } of diff) {
 		if (isExcluded(file)) {
 			skippedExcluded.push(file);
 			continue;
 		}
-		if (hasLocalChanges(file)) {
-			skippedLocalChanges.push(file);
-			continue;
+
+		const dirty = hasLocalChanges(file);
+		if (dirty) {
+			if (!force) {
+				skippedLocalChanges.push(file);
+				continue;
+			}
+			forcedOverLocalChanges.push(file);
 		}
 
 		if (status === "D") {
 			git(["rm", "-f", "--", file]);
 			deleted.push(file);
 		} else {
+			// `git checkout <ref> -- <path>` always overwrites the working-tree
+			// copy of that path, dirty or not - the hasLocalChanges() check
+			// above is what actually gates this, not any flag here.
 			git(["checkout", remoteHead, "--", file]);
 			updated.push(file);
 		}
@@ -98,7 +122,7 @@ export async function runUpdate(): Promise<UpdateResult> {
 		git([
 			"commit",
 			"-m",
-			`Auto-update from ${REMOTE}/${branch} (${remoteHead.slice(0, 7)})`,
+			`Auto-update from ${REMOTE}/${branch} (${remoteHead.slice(0, 7)})${force ? " [forced]" : ""}`,
 		]);
 	}
 
@@ -112,12 +136,19 @@ export async function runUpdate(): Promise<UpdateResult> {
 			`These changed upstream but were left alone due to local modifications: ${skippedLocalChanges.join(", ")}`
 		);
 	}
+	if (forcedOverLocalChanges.length > 0) {
+		log(
+			"WARN",
+			`--force was set: discarded local modifications to these files to apply the upstream version: ${forcedOverLocalChanges.join(", ")}`
+		);
+	}
 
-	return { upToDate: false, updated, deleted, skippedExcluded, skippedLocalChanges };
+	return { upToDate: false, updated, deleted, skippedExcluded, skippedLocalChanges, forcedOverLocalChanges };
 }
 
 if (require.main === module) {
-	runUpdate()
+	const force = process.argv.includes("--force");
+	runUpdate({ force })
 		.then((result) => {
 			console.log(JSON.stringify(result, null, 2));
 		})

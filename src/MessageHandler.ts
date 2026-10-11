@@ -765,6 +765,7 @@ export async function send_to_revolt(
 	attachments: Attachment[] | null = null
 ) {
 	if (updated_json.meta.read.revolt === false) {
+		if (updated_json.config.channels.revolt.length === 0) return true;
 		log("DEBUG", "Sending to revolt");
 		let channel_id: string;
 		try {
