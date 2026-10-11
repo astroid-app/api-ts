@@ -17,6 +17,7 @@ import { Endpoint } from "./types/Endpoint";
 import { getDb } from "./utils/pgsql";
 import log from "./utils/logger";
 import { response } from "express";
+import { reportError, wrapError } from "./ErrorHandler";
 
 dotenv.config();
 
@@ -59,7 +60,10 @@ function formatSendError(error: any): string {
 	}
 }
 
-async function executeSendTasksInParallel(tasks: SendTask[]): Promise<boolean> {
+async function executeSendTasksInParallel(
+	tasks: SendTask[],
+	endpoint: bigint
+): Promise<boolean> {
 	if (tasks.length === 0) return true;
 
 	const settled = await Promise.allSettled(tasks.map((task) => task.run()));
@@ -83,11 +87,11 @@ async function executeSendTasksInParallel(tasks: SendTask[]): Promise<boolean> {
 				);
 			}
 		} else {
-			log(
-				"ERROR",
-				`Sending to ${platform} threw an error.`,
-				formatSendError(result.reason)
-			);
+			// A thrown rejection carries a real error object (unlike the
+			// fulfilled-false case above), so this is the single reliable
+			// point to notify admins - report it here rather than at each
+			// individual send_to_* call site to avoid duplicate webhooks.
+			await reportError(endpoint, wrapError(`Sending to ${platform} failed`, result.reason));
 		}
 	}
 
@@ -100,7 +104,7 @@ export async function updateMeta(
 ): Promise<Endpoint | undefined> {
 	const db = await getDb();
 	if (!db) {
-		log("ERROR", "Database not initialized");
+		await reportError(endpoint, new Error("Database not initialized"));
 		return undefined;
 	}
 	try {
@@ -117,7 +121,7 @@ export async function updateMeta(
 			try {
 				currentMeta = JSON.parse(currentMeta);
 			} catch (e) {
-				log("ERROR", "Failed to parse current meta as JSON:", e);
+				await reportError(endpoint, wrapError("Failed to parse current meta as JSON", e));
 				return undefined;
 			}
 		}
@@ -134,7 +138,7 @@ export async function updateMeta(
 		]);
 		return result.rows[0].data as Endpoint;
 	} catch (err) {
-		log("ERROR", "Failed to update meta:", err);
+		await reportError(endpoint, wrapError("Failed to update meta", err));
 		return undefined;
 	} finally {
 		db.release();
@@ -174,7 +178,7 @@ export async function distribute(
 						log("WARN", `Attachment ${attachment} not found.`);
 					}
 				} catch (e) {
-					throw new Error(`Failed to download attachment ${attachment}: ${e}`);
+					throw wrapError(`Failed to download attachment ${attachment}`, e);
 				}
 			}
 		}
@@ -188,7 +192,7 @@ export async function distribute(
 					attachments
 				);
 			} catch (e) {
-				log("ERROR", "Failed to send from Discord:", e);
+				await reportError(endpoint, wrapError("Failed to send from Discord", e));
 				sendResults.discord = true;
 			}
 		}
@@ -200,7 +204,7 @@ export async function distribute(
 					attachments
 				);
 			} catch (e) {
-				log("ERROR", "Failed to send from Guilded:", e);
+				await reportError(endpoint, wrapError("Failed to send from Guilded", e));
 				sendResults.guilded = true;
 			}
 		}
@@ -212,7 +216,7 @@ export async function distribute(
 					attachments
 				);
 			} catch (e) {
-				log("ERROR", "Failed to send from Nerimity:", e);
+				await reportError(endpoint, wrapError("Failed to send from Nerimity", e));
 				sendResults.nerimity = true;
 			}
 		}
@@ -224,7 +228,7 @@ export async function distribute(
 					attachments
 				);
 			} catch (e) {
-				log("ERROR", "Failed to send from Revolt:", e);
+				await reportError(endpoint, wrapError("Failed to send from Revolt", e));
 				sendResults.revolt = true;
 			}
 		}
@@ -233,7 +237,7 @@ export async function distribute(
 		}
 		let db = await getDb();
 		if (!db) {
-			log("ERROR", "Database not initialized");
+			await reportError(endpoint, new Error("Database not initialized"));
 			return false;
 		}
 		try {
@@ -277,12 +281,12 @@ export async function distribute(
 			);
 			return true;
 		} catch (e) {
-			log("ERROR", "Failed to update endpoint data:", e);
+			await reportError(endpoint, wrapError("Failed to update endpoint data", e));
 		} finally {
 			db.release();
 		}
 	} catch (e) {
-		log("ERROR", "Failed to distribute message:", e);
+		await reportError(endpoint, wrapError("Failed to distribute message", e));
 		return false;
 	}
 	return false;
@@ -315,7 +319,7 @@ export async function send_from_discord(
 		log("DEBUG", "Skipping send_to_revolt from Discord (isbeta=false)");
 	}
 
-	return executeSendTasksInParallel(tasks);
+	return executeSendTasksInParallel(tasks, endpoint);
 }
 
 export async function send_from_nerimity(
@@ -344,7 +348,7 @@ export async function send_from_nerimity(
 		log("DEBUG", "Skipping send_to_revolt from Nerimity (isbeta=false)");
 	}
 
-	return executeSendTasksInParallel(tasks);
+	return executeSendTasksInParallel(tasks, endpoint);
 }
 
 export async function send_from_revolt(
@@ -376,7 +380,7 @@ export async function send_from_revolt(
 		);
 	}
 
-	return executeSendTasksInParallel(tasks);
+	return executeSendTasksInParallel(tasks, endpoint);
 }
 
 export async function send_from_guilded(
@@ -449,8 +453,9 @@ export async function send_to_discord(
 					try {
 						attachmentData = fs.readFileSync(filePath);
 					} catch (err) {
-						throw new Error(
-							`Failed to read attachment file: ${attachment.name}`
+						throw wrapError(
+							`Failed to read attachment file: ${attachment.name}`,
+							err
 						);
 					}
 					const file = new AttachmentBuilder(attachmentData, {
@@ -515,14 +520,14 @@ export async function send_to_discord(
 			if (response.id) {
 				return true;
 			} else {
-				log("ERROR", "Failed to send message to Discord: No response ID");
+				await reportError(endpoint, new Error("Failed to send message to Discord: No response ID"));
 				return false;
 			}
 		} else {
 			return false;
 		}
 	} catch (e) {
-		throw new Error(`Failed to send to Discord: ${e}`);
+		throw wrapError("Failed to send to Discord", e);
 	}
 }
 
@@ -699,26 +704,26 @@ export async function send_to_nerimity(
 									nerimityCdnFileId = attachResponse.data.fileId;
 									payload["nerimityCdnFileId"] = nerimityCdnFileId;
 								} else {
-									log(
-										"ERROR",
-										`Failed to attach file to Nerimity CDN. Response: ${attachResponse.status}, ${attachResponse.statusText}`
+									await reportError(
+										endpoint,
+										new Error(`Failed to attach file to Nerimity CDN. Response: ${attachResponse.status}, ${attachResponse.statusText}`)
 									);
 									return false;
 								}
 							} else {
-								log(
-									"ERROR",
-									`Failed to upload file to Nerimity CDN. Response: ${uploadResponse.status}, ${uploadResponse.statusText}`
+								await reportError(
+									endpoint,
+									new Error(`Failed to upload file to Nerimity CDN. Response: ${uploadResponse.status}, ${uploadResponse.statusText}`)
 								);
 								return false;
 							}
 						} catch (e) {
-							log("ERROR", "Error uploading attachment to nerimity:", e);
+							await reportError(endpoint, wrapError("Error uploading attachment to nerimity", e));
 							return false;
 						}
 					}
 				} catch (e) {
-					log("ERROR", "Error uploading attachment to nerimity:", e);
+					await reportError(endpoint, wrapError("Error uploading attachment to nerimity", e));
 					return false;
 				}
 			}
@@ -729,8 +734,9 @@ export async function send_to_nerimity(
 			const requestConfig = webhook_url ? {} : { headers };
 			let response = await axios.post(targetUrl, payload, requestConfig);
 			if (response.status !== 200) {
-				console.error(
-					`Failed to send message to Nerimity. Response: ${response.status}, ${response.statusText}`
+				await reportError(
+					endpoint,
+					new Error(`Failed to send message to Nerimity. Response: ${response.status}, ${response.statusText}`)
 				);
 				return false;
 			}
@@ -742,18 +748,13 @@ export async function send_to_nerimity(
 		}
 	} catch (e: any) {
 		if (e.isAxiosError && e.response) {
-			log(
-				"ERROR",
-				`AxiosError while sending to Nerimity: Status ${e.response.status}, ${e.response.statusText
-				}, Body: ${JSON.stringify(e.response.data)}`
-			);
-			throw new Error(
+			throw wrapError(
 				`Failed to send to Nerimity: Status ${e.response.status}, ${e.response.statusText
-				}, Body: ${JSON.stringify(e.response.data)}`
+				}, Body: ${JSON.stringify(e.response.data)}`,
+				e
 			);
 		} else {
-			log("ERROR", "Unknown error while sending to Nerimity:", e);
-			throw new Error(`Failed to send to Nerimity: ${e}`);
+			throw wrapError("Failed to send to Nerimity", e);
 		}
 	}
 }
@@ -799,11 +800,10 @@ export async function send_to_revolt(
 				);
 			}
 		} catch (e) {
-			log("ERROR", "Failed to resolve revolt target channel.", formatSendError(e));
 			if (e instanceof Error) {
 				throw e;
 			}
-			throw new Error(String(e));
+			throw wrapError(formatSendError(e), e);
 		}
 		const headers = {
 			"X-Bot-Token": updated_json.config.isbeta
@@ -815,7 +815,7 @@ export async function send_to_revolt(
 				`Missing Revolt token for ${updated_json.config.isbeta ? "beta" : "live"} mode`
 			);
 		}
-		const url = `https://api.revolt.chat/channels/${channel_id}/messages`;
+		const url = `https://api.stoat.chat/channels/${channel_id}/messages`;
 		const payload = {
 			masquerade: {
 				avatar: updated_json.meta.message.author.avatar,
@@ -835,11 +835,10 @@ export async function send_to_revolt(
 			log("INFO", "Sent to revolt");
 			return true;
 		} catch (e) {
-			log("ERROR", "Failed to send to revolt.", formatSendError(e));
 			if (e instanceof Error) {
 				throw e;
 			}
-			throw new Error(String(e));
+			throw wrapError(formatSendError(e), e);
 		}
 	} else {
 		log("DEBUG", "Skipping send_to_revolt because meta.read.revolt is already true");

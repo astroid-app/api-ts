@@ -30,6 +30,7 @@ import { markRead } from "./ReadHandler";
 import { addEmoji, removeEmoji, updateEmoji } from "./EmojiHandler";
 import { RecordId, StringRecordId, jsonify } from "surrealdb";
 import { migrateEndpointsFromSurrealToPostgres } from "./MigrationHandler";
+import { getErrorTraceback, expressErrorHandler } from "./ErrorHandler";
 
 dotenv.config();
 const MASTER_TOKEN = process.env.MASTER_TOKEN;
@@ -638,6 +639,19 @@ app.get("/allendpoints", async (req: Request, res: Response): Promise<any> => {
 	if (endpoints) {
 		res.status(200).json(endpoints);
 	}
+});
+
+app.get("/errors/:id", async (req: Request, res: Response): Promise<any> => {
+	const token = req.query.token as string;
+	if (token !== MASTER_TOKEN) {
+		return res.status(401).json({ message: "The provided token is invalid." });
+	}
+
+	const traceback = await getErrorTraceback(req.params.id);
+	if (traceback === null) {
+		return res.status(404).json({ message: "This error does not exist." });
+	}
+	return res.type("text/plain").status(200).send(traceback);
 });
 
 app.post("/migrate/endpoints/surreal-to-postgres", async (req: Request, res: Response): Promise<any> => {
@@ -1802,6 +1816,8 @@ app.delete(
 			.json({ message: "Token deleted", endpointId, token: tokenToDelete });
 	}
 );
+
+app.use(expressErrorHandler);
 
 const prideLogo = [
 	"\x1b[31m $$$$$$              $$\\                         $$\\       $$\\              $$$$$$\\  $$$$$$$\\ $$$$$$\\ \x1b[0m",

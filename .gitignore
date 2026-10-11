@@ -10,3 +10,4 @@ src/dbdata.json
 package-lock.json
 start.sh
 package-lock.json
+/errors
