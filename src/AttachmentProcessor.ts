@@ -4,7 +4,22 @@ import { getDb } from './utils/pgsql';
 import { Attachment } from './types/Attachment';
 import { r } from 'surrealdb';
 
+const ATTACHMENTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS attachments (
+    id text PRIMARY KEY,
+    data jsonb NOT NULL
+)
+`;
+let attachmentsTableEnsured = false;
+
+async function ensureAttachmentsTable(client: any): Promise<void> {
+    if (attachmentsTableEnsured) return;
+    await client.query(ATTACHMENTS_TABLE_SQL);
+    attachmentsTableEnsured = true;
+}
+
 async function getAttachment(client: any, attachmentId: string) {
+    await ensureAttachmentsTable(client);
     const res = await client.query('SELECT data FROM attachments WHERE id = $1', [attachmentId]);
     return res.rows[0]?.data;
 }
@@ -61,6 +76,7 @@ export async function downloadAttachment(attachmentUrl: string, registeredPlatfo
 
     const client = await getDb();
     try {
+        await ensureAttachmentsTable(client);
         await client.query(
             'INSERT INTO attachments (id, data) VALUES ($1, $2)',
             [
