@@ -794,11 +794,7 @@ export async function send_to_revolt(
 					updated_json.config.channels.revolt[
 					updated_json.config.channels.nerimity.indexOf(senderChannel)
 					];
-			} else {
-				throw new Error(
-					`The channel ${senderChannel} (${updated_json.meta.sender}) does not seem to be a registered channel on other platforms.`
-				);
-			}
+			} else {}
 		} catch (e) {
 			if (e instanceof Error) {
 				throw e;
