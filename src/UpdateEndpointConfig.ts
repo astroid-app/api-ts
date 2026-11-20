@@ -49,8 +49,10 @@ export async function updateEndpointConfig(
         )`;
         values.push(JSON.stringify(value));
       } else {
-        updateExpr = `to_jsonb($${paramIndex}::text)`;
-        values.push(value);
+        // Pass scalars as JSON so booleans, numbers and null keep their type
+        // (casting to ::text would store them as strings).
+        updateExpr = `$${paramIndex}::jsonb`;
+        values.push(JSON.stringify(value === undefined ? null : value));
       }
 
       baseExpr = `jsonb_set(${baseExpr}, '{${path.join(
