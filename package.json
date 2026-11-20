@@ -6,11 +6,12 @@
   "scripts": {
     "build": "node ./node_modules/typescript/bin/tsc --outDir ./dist",
     "start": "tsc --outDir ./dist && node ./dist/index.js -p",
-    "startwb": "node ./dist/index.js -w",
+    "startwatch": "node ./dist/index.js -w",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "update": "tsc --outDir ./dist && node ./dist/update.js"
+    "update": "tsc --outDir ./dist && node ./dist/update.js",
+    "compileC": "scriptc build src/index.ts -o ./distC/index"
   },
-  "author": "Deutscher 775",
+  "author": "isapropanol",
   "license": "AGPL-3.0",
   "dependencies": {
     "@sentry/node": "^9.8.0",
@@ -32,7 +33,8 @@
     "pg": "^8.14.1",
     "sentry": "^0.1.2",
     "surrealdb": "^1.2.1",
-    "surrealdb.js": "^1.0.0"
+    "surrealdb.js": "^1.0.0",
+    "ts2c": "^3.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

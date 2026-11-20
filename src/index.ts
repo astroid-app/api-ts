@@ -1,4 +1,4 @@
-import express = require("express");
+import express from "express";
 import * as Sentry from "@sentry/node";
 import * as dotenv from "dotenv";
 import { NextFunction, Request, Response } from "express";
@@ -10,19 +10,20 @@ import {
 	updateEndpointConfig,
 } from "./UpdateEndpointConfig";
 import { validateConfig } from "./types/ConfigKeys";
-import cors = require("cors");
+import cors from "cors";
 import { roundStatistics } from "./Statistics";
 import { is_suspended } from "./SuspensionHandler";
-import { distribute, updateMeta } from "./MessageHandler";
 import { getDb } from "./utils/pgsql";
 import "./QueueProcessor";
 import { createEndpointAndToken, createNewToken } from "./CreationHandler";
 import { deleteEndpointAndToken, deleteToken } from "./DeletionHandler";
 import log from "./utils/logger";
 import { getLogFilePath } from "./utils/logger";
+import { installRequestLogger } from "./utils/requestLogger";
 import { checkEndpoint, repairEndpointStructure, dailyCheck } from "./HealthCheck";
 import { health } from "./utils/health";
-import path = require("path");
+import { parseJsonSafe, parseId } from "./utils/json";
+import path from "path";
 import { getDb as getSurrealDb } from "./utils/surrealdb";
 import * as crypto from "crypto";
 import { clearTemporaryAttachments } from "./AttachmentProcessor";
@@ -33,6 +34,7 @@ import { migrateEndpointsFromSurrealToPostgres } from "./MigrationHandler";
 import { getErrorTraceback, expressErrorHandler } from "./ErrorHandler";
 
 dotenv.config();
+installRequestLogger();
 const MASTER_TOKEN = process.env.MASTER_TOKEN;
 const SENTRY_DSN = process.env.SENTRY_DSN;
 
@@ -47,7 +49,23 @@ Sentry.init({
 const app = express();
 
 
-app.use(express.json());
+// JSON bodies are parsed losslessly: express.json() would round 64-bit ids
+// sent as numbers (e.g. {"endpointId": 1045439291234459688}).
+const JSON_TYPES = ["application/json", "application/*+json"];
+app.use(express.text({ type: JSON_TYPES, limit: "100kb" }));
+app.use((req: Request, res: Response, next: NextFunction) => {
+	if (typeof req.body !== "string" || !req.is(JSON_TYPES)) return next();
+	if (req.body.trim() === "") {
+		req.body = {};
+		return next();
+	}
+	try {
+		req.body = parseJsonSafe(req.body);
+		next();
+	} catch {
+		res.status(400).json({ message: "Bad Request: Invalid JSON body", status: 400 });
+	}
+});
 
 app.use((req: Request, res: Response, next: NextFunction) => {
 	log("API_REQUEST", `${req.method} ${req.url}`);
@@ -284,6 +302,10 @@ app.get("/health", (req: Request, res: Response) => {
 	res.status(200).json(health.getSummary());
 });
 
+app.get("/health/queue-history", (req: Request, res: Response) => {
+	res.status(200).json(health.getQueueHistory());
+});
+
 app.get("/health/events", (req: Request, res: Response) => {
 	const limit = Math.min(1000, parseInt(String(req.query.limit ?? "100"), 10) || 100);
 	res.status(200).json(health.getRecentEvents(limit));
@@ -293,6 +315,8 @@ app.get("/health/stream", (req: Request, res: Response) => {
 	res.setHeader("Content-Type", "text/event-stream");
 	res.setHeader("Cache-Control", "no-cache");
 	res.setHeader("Connection", "keep-alive");
+	// Stop nginx/reverse proxies from buffering the stream.
+	res.setHeader("X-Accel-Buffering", "no");
 	res.flushHeaders?.();
 	const snap = health.getSummary();
 	res.write(`event: snapshot\n`);
@@ -1012,10 +1036,10 @@ app.post("/createendpoint/:platform", async (req: Request, res: Response): Promi
 	const db = await getSurrealDb();
 	try {
 		const recordId = new StringRecordId(`${platform}_servers:⟨${serverId}⟩`);
-		await db.create(recordId, { discord: Number(endpointId.toString()) }).catch(async () => {
-			await db.merge(recordId, { discord: Number(endpointId.toString()) });
+		await db.create(recordId, { discord: endpointId }).catch(async () => {
+			await db.merge(recordId, { discord: endpointId });
 		});
-		return res.status(200).json({ message: "Success.", endpoint: Number(endpointId.toString()), id: serverId, platform });
+		return res.status(200).json({ message: "Success.", endpoint: endpointId.toString(), id: serverId, platform });
 	} catch {
 		return res.status(404).json({ message: "This endpoint does not exist." });
 	}
@@ -1152,6 +1176,19 @@ app.get("/contribution/contributors", async (req: Request, res: Response): Promi
 	}
 });
 
+/**
+ * Selects a SurrealDB record keyed by a 64-bit id. Records written before ids
+ * were handled as BigInt were keyed by the rounded Number value, so fall back
+ * to that key when no exact record exists.
+ */
+async function selectByUserId(db: Awaited<ReturnType<typeof getSurrealDb>>, table: string, id: bigint): Promise<any> {
+	const exact = await db.select(new RecordId(table, id));
+	if (exact) return exact;
+	const legacy = Number(id);
+	if (Number.isSafeInteger(legacy)) return exact; // same key, nothing else to try
+	return await db.select(new RecordId(table, legacy));
+}
+
 app.get("/contribution/contributor", async (req: Request, res: Response): Promise<any> => {
 	const name = req.query.name as string | undefined;
 	const id = req.query.id as string | undefined;
@@ -1170,7 +1207,9 @@ app.get("/contribution/contributor", async (req: Request, res: Response): Promis
 			return res.status(200).json(rows[0] || null);
 		}
 
-		const record = await db.select(new RecordId("contributors", Number(id)));
+		const contributorId = parseId(id);
+		if (contributorId === null) return res.status(400).json({ message: "Invalid id." });
+		const record = await selectByUserId(db, "contributors", contributorId);
 		return res.status(200).json(jsonify(record));
 	} catch (e) {
 		return res.status(404).json({ message: `An error occurred: ${String(e)}` });
@@ -1194,7 +1233,9 @@ app.get("/contribution/contributor/avatar", async (req: Request, res: Response):
 			const rows = jsonify(await db.query("SELECT avatar FROM contributors WHERE username = $name LIMIT 1", { name })) as any[];
 			return res.status(200).json(rows[0]?.avatar ?? null);
 		}
-		const record = jsonify(await db.select(new RecordId("contributors", Number(id)))) as any;
+		const contributorId = parseId(id);
+		if (contributorId === null) return res.status(400).json({ message: "Invalid id." });
+		const record = jsonify(await selectByUserId(db, "contributors", contributorId)) as any;
 		return res.status(200).json(record?.avatar ?? null);
 	} catch (e) {
 		return res.status(404).json({ message: `An error occurred: ${String(e)}` });
@@ -1207,14 +1248,15 @@ app.post("/contribution/addcontributor/:id", async (req: Request, res: Response)
 		return res.status(401).json({ message: "The provided token is invalid." });
 	}
 
-	const id = Number(req.params.id);
+	const id = parseId(req.params.id);
+	if (id === null) return res.status(400).json({ message: "Invalid id." });
 	const username = req.body.username as string | undefined;
 	const avatar = req.body.avatar as string | undefined;
 
 	const db = await getSurrealDb();
 	try {
 		const recordId = new RecordId("contributors", id);
-		await db.create(recordId, { id, username, avatar }).catch(async () => {
+		await db.create(recordId, { username, avatar }).catch(async () => {
 			await db.merge(recordId, { username, avatar });
 		});
 		const updated = await db.select(recordId);
@@ -1325,7 +1367,8 @@ app.post("/optout/:userid", async (req: Request, res: Response): Promise<any> =>
 		return res.status(401).json({ message: "The provided token is invalid." });
 	}
 
-	const userid = Number(req.params.userid);
+	const userid = parseId(req.params.userid);
+	if (userid === null) return res.status(400).json({ message: "Invalid user id." });
 	const db = await getSurrealDb();
 	const record = new RecordId("optout", userid);
 	await db.create(record, { optedOut: true }).catch(async () => {
@@ -1340,7 +1383,8 @@ app.post("/optin/:userid", async (req: Request, res: Response): Promise<any> => 
 		return res.status(401).json({ message: "The provided token is invalid." });
 	}
 
-	const userid = Number(req.params.userid);
+	const userid = parseId(req.params.userid);
+	if (userid === null) return res.status(400).json({ message: "Invalid user id." });
 	const db = await getSurrealDb();
 	const record = new RecordId("optout", userid);
 	await db.create(record, { optedOut: false }).catch(async () => {
@@ -1355,9 +1399,11 @@ app.get("/optout/:userid", async (req: Request, res: Response): Promise<any> => 
 		return res.status(401).json({ message: "The provided token is invalid." });
 	}
 
-	const userid = Number(req.params.userid);
+	const userid = parseId(req.params.userid);
+	if (userid === null) return res.status(400).json({ message: "Invalid user id." });
 	const db = await getSurrealDb();
-	const record = jsonify(await db.select(new RecordId("optout", userid))) as any;
+	// An exact record wins; otherwise honour opt-outs stored under the old rounded key.
+	const record = jsonify(await selectByUserId(db, "optout", userid)) as any;
 	return res.status(200).json({ optedOut: !!record?.optedOut });
 });
 
@@ -1644,23 +1690,31 @@ app.post("/:id/messages", async (req: Request, res: Response): Promise<any> => {
 	}
 	const db = await getDb();
 	try {
+		// Atomic append: never read-modify-write the queue in JS.
 		const { rows } = await db.query(
-			"SELECT data->'meta'->'_message_cache' AS cache FROM endpoints WHERE id = $1",
-			[endpointId]
+			`UPDATE endpoints
+			    SET data = jsonb_set(
+			        data,
+			        '{meta,_message_cache}',
+			        (CASE WHEN jsonb_typeof(data->'meta'->'_message_cache') = 'array'
+			              THEN data->'meta'->'_message_cache'
+			              ELSE '[]'::jsonb END) || jsonb_build_array($2::jsonb),
+			        true)
+			  WHERE id = $1
+			RETURNING jsonb_array_length(data->'meta'->'_message_cache') AS queue_len`,
+			[endpointId.toString(), JSON.stringify(message)]
 		);
-		let cache: any[] = [];
-		if (rows.length > 0 && Array.isArray(rows[0].cache)) {
-			cache = rows[0].cache;
+		if (rows.length === 0) {
+			return res.status(404).send({ message: "Endpoint not found", status: 404 });
 		}
-		cache.push(message);
-		await updateMeta(endpointId, { _message_cache: cache });
 
 		health.increment("messages_enqueued");
+		health.increment("messages_in_queue");
 
 		return res.status(200).json({
 			message: "Message added to queue",
 			status: 200,
-			queueLength: cache.length,
+			queueLength: Number(rows[0].queue_len),
 		});
 	} finally {
 		db.release();
@@ -1704,7 +1758,7 @@ app.post("/create", async (req: Request, res: Response): Promise<any> => {
 	}
 	const safeResult = {
 		...result,
-		endpointId: Number(result.endpointId)
+		endpointId: String(result.endpointId)
 	};
 	return res.status(200).json(safeResult);
 });
@@ -1888,22 +1942,7 @@ async function checkServiceHealth() {
 		health.updateServiceHealth("database_surreal", "down", { error: String(err) });
 	}
 
-	const summary = health.getSummary();
-	const queueSize = summary.counters.messages_in_queue || 0;
-	const activeEndpoints = summary.counters.active_endpoints_with_work || 0;
-	if (queueSize > 100) {
-		health.updateServiceHealth("queue_processor", "degraded", { metadata: { queueSize, activeEndpoints } });
-	} else {
-		health.updateServiceHealth("queue_processor", "healthy", { metadata: { queueSize, activeEndpoints } });
-	}
-
-	const processedCount = summary.counters.messages_processed || 0;
-	const enqueuedCount = summary.counters.messages_enqueued || 0;
-	if (enqueuedCount > 0 && processedCount === 0) {
-		health.updateServiceHealth("message_distribution", "degraded", { metadata: { enqueuedCount, processedCount } });
-	} else {
-		health.updateServiceHealth("message_distribution", "healthy", { metadata: { enqueuedCount, processedCount } });
-	}
+	// queue_processor / message_distribution are derived from live counters in health.getSummary().
 }
 
 

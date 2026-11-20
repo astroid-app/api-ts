@@ -50,7 +50,7 @@
       .status-dot.down { animation: pulse-red 1s infinite; }
       
       /* Chart container enhancements */
-      #latencyChart {
+      #latencyChart, #queueChart {
         width: 100% !important;
         height: 100% !important;
       }
@@ -159,6 +159,35 @@
               <div class="mb-2">📊</div>
               <div>Collecting database latency data...</div>
               <div class="text-xs mt-1">Chart will appear once ping tests are completed</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Queue Size Chart -->
+      <section class="bg-dark-card border border-dark-border rounded-lg p-5 mb-5 transition-all duration-200 hover:border-accent-blue/50 hover:shadow-lg hover:shadow-accent-blue/10">
+        <div class="flex items-center justify-between mb-4 gap-4 flex-wrap">
+          <div>
+            <h2 class="text-sm font-semibold text-dark-text-secondary uppercase tracking-wide">Queue Size · last 24h</h2>
+            <div class="text-xs text-dark-text-muted">Peak queued messages per minute · since last API restart</div>
+          </div>
+          <div class="flex gap-6 text-right">
+            <div>
+              <div class="text-xs text-dark-text-muted uppercase tracking-wide">24h peak</div>
+              <div id="queuePeak" class="text-lg font-semibold text-dark-text">--</div>
+            </div>
+            <div>
+              <div class="text-xs text-dark-text-muted uppercase tracking-wide">Now</div>
+              <div id="queueNow" class="text-lg font-semibold text-dark-text">--</div>
+            </div>
+          </div>
+        </div>
+        <div class="bg-dark-elevated rounded-md p-4 relative" style="height: 300px;">
+          <canvas id="queueChart" role="img" aria-label="Queue size over the last 24 hours"></canvas>
+          <div id="emptyQueueMessage" class="absolute inset-0 flex items-center justify-center text-dark-text-muted text-sm hidden">
+            <div class="text-center">
+              <div>Collecting queue data...</div>
+              <div class="text-xs mt-1">A point is recorded every minute</div>
             </div>
           </div>
         </div>
@@ -624,11 +653,17 @@
         const time = new Date(ev.time).toLocaleTimeString();
         const line = document.createElement('div');
         line.className = 'flex gap-3 py-1.5 border-b border-white/5 last:border-b-0 hover:bg-dark-bg/50 transition-colors duration-150';
-        line.innerHTML = `
-          <span class="text-dark-text-muted whitespace-nowrap">${time}</span>
-          <span class="text-accent-blue min-w-[120px]">${ev.type}</span>
-          <span class="text-dark-text-secondary flex-1">${ev.message}</span>
-        `;
+        // textContent, not innerHTML: event text can contain error output.
+        for (const [cls, text] of [
+          ['text-dark-text-muted whitespace-nowrap', time],
+          ['text-accent-blue min-w-[120px]', ev.type],
+          ['text-dark-text-secondary flex-1', ev.message],
+        ]) {
+          const span = document.createElement('span');
+          span.className = cls;
+          span.textContent = text ?? '';
+          line.appendChild(span);
+        }
         log.appendChild(line);
         log.scrollTop = log.scrollHeight;
 
@@ -669,11 +704,120 @@
         }
       }
 
+      // Queue size history (24h, one point per minute)
+      let queueChart;
+      const QUEUE_COLOR = '#3b82f6';
+
+      function initQueueChart() {
+        const ctx = document.getElementById('queueChart');
+        queueChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: [],
+            datasets: [{
+              label: 'Queue size',
+              data: [],
+              borderColor: QUEUE_COLOR,
+              backgroundColor: 'rgba(59, 130, 246, 0.15)',
+              fill: 'origin',
+              borderWidth: 2,
+              tension: 0,
+              pointRadius: 0,
+              pointHoverRadius: 5,
+              pointHoverBackgroundColor: QUEUE_COLOR,
+              pointHoverBorderColor: '#161b22',
+              pointHoverBorderWidth: 2,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { intersect: false, mode: 'index' },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: 'rgba(33, 38, 45, 0.95)',
+                titleColor: '#e6edf3',
+                bodyColor: '#8b949e',
+                borderColor: '#30363d',
+                borderWidth: 1,
+                cornerRadius: 8,
+                displayColors: false,
+                callbacks: {
+                  title: (items) => {
+                    const p = queueChart.$points[items[0].dataIndex];
+                    return new Date(p.timestamp).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+                  },
+                  label: (item) => {
+                    const p = queueChart.$points[item.dataIndex];
+                    return [`Peak: ${p.max.toLocaleString()} messages`, `End of minute: ${p.last.toLocaleString()}`];
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: { color: '#6e7681', maxTicksLimit: 8, maxRotation: 0, autoSkip: true, font: { size: 10, family: 'Inter' } },
+                grid: { display: false },
+                border: { color: '#30363d' }
+              },
+              y: {
+                beginAtZero: true,
+                title: { display: true, text: 'Messages queued', color: '#8b949e', font: { size: 12, family: 'Inter' } },
+                ticks: { color: '#6e7681', precision: 0, font: { size: 10, family: 'Inter' } },
+                grid: { color: '#21262d' },
+                border: { display: false }
+              }
+            }
+          }
+        });
+        queueChart.$points = [];
+      }
+
+      async function loadQueueHistory() {
+        try {
+          const res = await fetch(location.origin + '/health/queue-history');
+          const points = await res.json();
+          renderQueueHistory(Array.isArray(points) ? points : []);
+        } catch (e) {
+          console.error('Failed to fetch queue history:', e);
+        }
+      }
+
+      function renderQueueHistory(points) {
+        const empty = $('#emptyQueueMessage');
+        const canvas = $('#queueChart');
+        // Only the live partial minute exists right after startup.
+        if (points.length < 2) {
+          empty.classList.remove('hidden');
+          canvas.style.opacity = '0.3';
+        } else {
+          empty.classList.add('hidden');
+          canvas.style.opacity = '1';
+        }
+
+        queueChart.$points = points;
+        queueChart.data.labels = points.map(p =>
+          new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        );
+        queueChart.data.datasets[0].data = points.map(p => p.max);
+        queueChart.update('none');
+
+        const peak = points.reduce((m, p) => Math.max(m, p.max), 0);
+        const now = points.length ? points[points.length - 1].last : 0;
+        $('#queuePeak').textContent = points.length ? peak.toLocaleString() : '--';
+        $('#queueNow').textContent = points.length ? now.toLocaleString() : '--';
+      }
+
       async function bootstrap() {
         const base = location.origin;
 
-        // Initialize chart
+        // Initialize charts
         initChart();
+        initQueueChart();
+        loadQueueHistory();
+        setInterval(loadQueueHistory, 60000);
 
         // Setup ping button
         $('#pingButton').addEventListener('click', triggerPingTest);

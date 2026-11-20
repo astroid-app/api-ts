@@ -75,6 +75,20 @@ async def activity_task():
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user} ({client.user.id})")
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(f"{api_url}/1?token={os.getenv('MASTER_TOKEN')}") as r:
+                data = await r.json()
+                if data:
+                    print("API is reachable.")
+                else:
+                    print("API did not return valid data.")
+        except Exception as e:
+            print("Error checking API reachability:", e)
+            return
+        finally:
+            await session.close()
+        
     client.loop.create_task(activity_task())
     client.loop.create_task(iamup_loop())
 
@@ -118,10 +132,10 @@ async def on_message(message: nextcord.Message):
             async with session.get(f"{api_url}/{message.guild.id}?token={os.getenv('MASTER_TOKEN')}") as config_request:
                 config_data = await config_request.json()
             # Check if channel is allowed
-            if not config_data.get("isbeta", False):
+            if config_data.get("config", {}).get("isbeta"):
                 return
             # Check if the message is in a bridged channel
-            if str(message.channel.id) in config_data.get("config", {}).get("channels", {}).get("discord", []):
+            if str(message.channel.id) in config_data.get("config", {}).get("channels", {}).get("discord", {}):
                 await asyncio.sleep(2)
                 try:
                     message_still_exists = await message.channel.fetch_message(message.id)
@@ -144,13 +158,7 @@ async def on_message(message: nextcord.Message):
                 if message.author.bot:
                     if str(message.author.id) not in allowed_ids:
                         return
-                all_enpoint_webhooks = None
-                discord_channel = config_data.get("config", {}).get("channels", {}).get("discord", {}).get(str(message.channel.id), {})
-                if discord_channel.get("config").get("webhooks").get("discord"):
-                    all_enpoint_webhooks = discord_channel.get("config").get("webhooks").get("discord")
-                webhook_ids = [webhook.replace("https://discord.com/api/webhooks/", "").split("/")[0] for webhook in all_enpoint_webhooks]
-                print(webhook_ids)
-                print(str(message.author.id))
+
                 msg_obj = {
                     "content": message.content,
                     "author": {
@@ -249,7 +257,7 @@ async def register(interaction: nextcord.Interaction):
             
             # Create an endpoint in the API using the new endpoint
             async with session.post(f"{api_url}/create?token={os.getenv('MASTER_TOKEN')}", 
-                                  json={"endpointId": interaction.guild.id}) as r1:
+                                  json={"endpointId": f"{interaction.guild.id}"}) as r1:
                 if r1.status == 200:
                     endpoint_data = await r1.json()
                     await interaction.edit_original_message(content="Created endpoint. Updating values.. (This may take a while.)")
@@ -261,7 +269,7 @@ async def register(interaction: nextcord.Interaction):
             # Update the endpoint configuration using the new API structure
             config_data = {
                 "channels": {
-                    "discord": [interaction.channel.id]
+                    "discord": [f"{interaction.channel.id}"]
                 },
                 "webhooks": {
                     "discord": [webhook.url]
@@ -279,7 +287,7 @@ async def register(interaction: nextcord.Interaction):
                     )
                 else:
                     error_data = await r2.json()
-                    await interaction.edit_original_message(content=f"{error_data.get("message")}\n```{error_data.get("details")}```")
+                    await interaction.edit_original_message(content=f'{error_data.get("message")}\n```{error_data.get("details")}```')
     except Exception as e:
         traceback.print_exc()
         await interaction.edit_original_message(content=f"An error occurred: {str(e)}")
@@ -352,7 +360,7 @@ async def delete(interaction: nextcord.Interaction):
     async with aiohttp.ClientSession() as session:
         # Delete the endpoint in the API using the new endpoint
         async with session.delete(f"{api_url}/delete?token={os.getenv('MASTER_TOKEN')}", 
-                                json={"endpointId": interaction.guild.id}) as r:
+                                json={"endpointId": str(interaction.guild.id)}) as r:
             if r.status == 200:    
                 await interaction.edit_original_message(content="Deleted endpoint.")
             else:    
@@ -422,7 +430,7 @@ async def gen(interaction: nextcord.Interaction):
                 return await interaction.edit_original_message(content="API is not reachable. Please try again later.")
         
         async with session.post(f"{api_url}/newtoken?token={os.getenv('MASTER_TOKEN')}", 
-                              json={"endpointId": interaction.guild.id}) as token_gen:
+                              json={"endpointId": str(interaction.guild.id)}) as token_gen:
             if token_gen.status == 200:
                 token_data = await token_gen.json()
                 await interaction.edit_original_message(content=f"Your new API Token is: `{token_data['token']}`\nSave and **__do not__** share this!")
@@ -431,7 +439,7 @@ async def gen(interaction: nextcord.Interaction):
                 await interaction.edit_original_message(content=error_data.get("message"))
 
 # Run the bot
-discord_token = os.getenv("BETA_DISCORD_TOKEN")
+discord_token = os.getenv("DISCORD_TOKEN")
 if discord_token:
     client.run(discord_token)
 else:

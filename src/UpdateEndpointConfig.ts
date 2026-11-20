@@ -1,6 +1,5 @@
 import { getDb } from "./utils/pgsql";
 import { Config } from "./types/Endpoint";
-import { console } from "inspector";
 import log from "./utils/logger";
 
 type NestedKeyValue = { path: string[]; value: any };
@@ -69,7 +68,6 @@ export async function updateEndpointConfig(
 
     return result.rows[0].data.config as Config;
   } catch (err) {
-    console.error("Error executing update for:", endpointId);
     throw err;
   } finally {
     await client.release();

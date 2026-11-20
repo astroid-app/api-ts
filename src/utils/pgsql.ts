@@ -1,9 +1,16 @@
-import { Pool, PoolClient } from 'pg';
+import { Pool, PoolClient, types } from 'pg';
+import { parseJsonSafe } from './json';
 import * as dotenv from 'dotenv';
 import log from "./logger";
 import { exit } from 'process';
 
 dotenv.config();
+
+// pg parses json/jsonb with JSON.parse, which rounds 64-bit ids stored as
+// numbers. Keep them as strings instead. (int8/bigint columns already come
+// back as strings by default.)
+types.setTypeParser(114 /* json */, parseJsonSafe);
+types.setTypeParser(3802 /* jsonb */, parseJsonSafe);
 
 export const pool = new Pool({
     user: process.env.POSTGRES_USER,

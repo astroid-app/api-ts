@@ -1,11 +1,11 @@
 import { getEndpoint } from "./GetEndpoint";
-import { updateMeta } from "./MessageHandler";
 import { distribute } from "./MessageHandler";
 import { Endpoint } from "./types/Endpoint";
 import log from "./utils/logger";
 import { getDb } from "./utils/pgsql";
 import { Worker, isMainThread} from "worker_threads";
 import { health } from "./utils/health";
+import { installRequestLogger } from "./utils/requestLogger";
 
 function isMessageEmpty(msg: any): boolean {
 	if (!msg) return true;
@@ -33,6 +33,33 @@ function isMessageEmpty(msg: any): boolean {
 	if (msg["sender-channel"] !== null && msg["sender-channel"] !== undefined)
 		return false;
 	return true;
+}
+
+/**
+ * Atomically moves the first queued message into meta.message and removes it
+ * from the queue. Both jsonb_set calls read the same pre-update row, so a
+ * concurrent enqueue can neither be lost nor resurrect an already-sent message.
+ */
+async function dequeue(endpointId: bigint): Promise<Endpoint | undefined> {
+	const db = await getDb();
+	if (!db) return undefined;
+	try {
+		const { rows } = await db.query(
+			`UPDATE endpoints
+			    SET data = jsonb_set(
+			        jsonb_set(data, '{meta,message}', data->'meta'->'_message_cache'->0),
+			        '{meta,_message_cache}',
+			        (data->'meta'->'_message_cache') - 0)
+			  WHERE id = $1
+			    AND jsonb_typeof(data->'meta'->'_message_cache') = 'array'
+			    AND jsonb_array_length(data->'meta'->'_message_cache') > 0
+			RETURNING data`,
+			[endpointId.toString()]
+		);
+		return rows.length > 0 ? (rows[0].data as Endpoint) : undefined;
+	} finally {
+		db.release();
+	}
 }
 
 export async function processMessageQueue(endpointId: bigint) {
@@ -68,18 +95,10 @@ export async function processMessageQueue(endpointId: bigint) {
 			continue;
 		}
 
-		const nextMessage = cache[0];
-		const newCache = cache.slice(1);
-
-		await updateMeta(endpointId, {
-			message: nextMessage,
-			_message_cache: newCache,
-		});
-		health.record("queue:dequeue", `Dequeue message for ${endpointId.toString()}`);
-		health.setCounter("messages_in_queue", newCache.length);
-
-		const updated = await getEndpoint(endpointId);
+		const updated = await dequeue(endpointId);
 		if (!updated) return;
+		health.record("queue:dequeue", `Dequeue message for ${endpointId.toString()}`);
+		health.decrement("messages_in_queue");
 
 		const sent = await distribute(endpointId, updated);
 		if (!sent) {
@@ -96,8 +115,14 @@ export async function processMessageQueue(endpointId: bigint) {
 }
 
 if (isMainThread) {
-	new Worker(__filename);
+	const worker = new Worker(__filename);
+	worker.on("message", (msg) => health.applyWorkerMessage(msg));
+	worker.on("error", (err) => {
+		log("ERROR", "QueueProcessor worker crashed:", err);
+		health.record("queue:error", "Queue worker crashed", { error: String(err) });
+	});
 } else {
+	installRequestLogger();
 	log("INFO", "QueueProcessor started");
 	health.record("worker", "Queue processor worker running");
 	let skippedEndpoints: { [key: string]: number } = {};
@@ -184,6 +209,7 @@ if (isMainThread) {
 				try {
 					health.record("queue:process", `Process endpoint ${endpointId}`);
 					await processMessageQueue(BigInt(endpointId));
+					health.decrement("active_endpoints_with_work");
 				} catch (error) {
 					log("ERROR", `Error processing queue for ${endpointId}:`, error);
 					health.record("queue:error", `Error processing ${endpointId}`, { error: String(error) });

@@ -11,3 +11,6 @@ package-lock.json
 start.sh
 package-lock.json
 /errors
+/beta
+/bots/rootbot
+/bots/__pycache__

@@ -26,13 +26,14 @@ const COLORS = {
     SUCCESS: "\x1b[32m", // Green
     LOG: "\x1b[34m",     // Blue
     API_REQUEST: "\x1b[38;5;208m", // Orange
+    REQ_DEBUG: "\x1b[38;5;141m", // Light purple
 };
 
 function getTimestamp(): string {
     return new Date().toISOString();
 }
 
-function formatLog(level: "INFO" | "WARNING" | "ERROR" | "DEBUG" | "SUCCESS" | "LOG" | "API_REQUEST", message: string): { colored: string, plain: string } {
+function formatLog(level: "INFO" | "WARNING" | "ERROR" | "DEBUG" | "SUCCESS" | "LOG" | "API_REQUEST" | "REQ_DEBUG", message: string): { colored: string, plain: string } {
     const plain = `[${getTimestamp()}] [${level}] ${message}`;
     const colored = `${COLORS[level]}[${getTimestamp()}] [${level}]${RESET} ${message}`;
     return { colored, plain };
@@ -110,7 +111,13 @@ async function logApiRequest(message: string) {
     await writeLogToFile(plain);
 }
 
-export default async function log(level: "INFO" | "WARN" | "ERROR" | "DEBUG" | "SUCCESS" | "LOG" | "API_REQUEST", message: string, error?: any) {
+async function logReqDebug(message: string) {
+    const { colored, plain } = formatLog("REQ_DEBUG", message);
+    console.debug(colored);
+    await writeLogToFile(plain);
+}
+
+export default async function log(level: "INFO" | "WARN" | "ERROR" | "DEBUG" | "SUCCESS" | "LOG" | "API_REQUEST" | "REQ_DEBUG", message: string, error?: any) {
     switch (level) {
         case "INFO":
             await logInfo(message, error);
@@ -132,6 +139,9 @@ export default async function log(level: "INFO" | "WARN" | "ERROR" | "DEBUG" | "
             break;
         case "API_REQUEST":
             await logApiRequest(message);
+            break;
+        case "REQ_DEBUG":
+            await logReqDebug(message);
             break;
         default:
             await logLog("LOG", `Unknown log level: ${level}. Message: ${message}`);

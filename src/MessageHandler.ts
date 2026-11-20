@@ -108,35 +108,29 @@ export async function updateMeta(
 		return undefined;
 	}
 	try {
+		// Set only the given meta keys in a single statement, so concurrent
+		// writers to other keys (e.g. the queue) are never overwritten.
+		const params: any[] = [endpoint.toString()];
+		let expr = "jsonb_set(data, '{meta}', COALESCE(data->'meta', '{}'::jsonb), true)";
+		for (const [key, value] of Object.entries(meta_data)) {
+			params.push(key);
+			const keyParam = `$${params.length}`;
+			if (value === undefined) {
+				expr = `(${expr} #- ARRAY['meta', ${keyParam}::text])`;
+				continue;
+			}
+			params.push(JSON.stringify(value));
+			expr = `jsonb_set(${expr}, ARRAY['meta', ${keyParam}::text], $${params.length}::jsonb, true)`;
+		}
 		const { rows } = await db.query(
-			"SELECT data->'meta' AS meta FROM endpoints WHERE id = $1",
-			[endpoint.toString()]
+			`UPDATE endpoints SET data = ${expr} WHERE id = $1 RETURNING data`,
+			params
 		);
 		if (rows.length === 0) {
 			log("ERROR", `Endpoint '${endpoint}' not found`);
 			return undefined;
 		}
-		let currentMeta = rows[0].meta;
-		if (typeof currentMeta === "string") {
-			try {
-				currentMeta = JSON.parse(currentMeta);
-			} catch (e) {
-				await reportError(endpoint, wrapError("Failed to parse current meta as JSON", e));
-				return undefined;
-			}
-		}
-		const updatedMeta = {
-			...currentMeta,
-			...meta_data,
-		};
-		await db.query(
-			"UPDATE endpoints SET data = jsonb_set(data, '{meta}', $2::jsonb) WHERE id = $1",
-			[endpoint.toString(), JSON.stringify(updatedMeta)]
-		);
-		const result = await db.query("SELECT data FROM endpoints WHERE id = $1", [
-			endpoint.toString(),
-		]);
-		return result.rows[0].data as Endpoint;
+		return rows[0].data as Endpoint;
 	} catch (err) {
 		await reportError(endpoint, wrapError("Failed to update meta", err));
 		return undefined;
@@ -676,26 +670,25 @@ export async function send_to_nerimity(
 						throw new Error("Invalid file path");
 					} else {
 						const filePath = path.resolve(attachments[0].path);
-						const uploadFormData = new FormData();
-						uploadFormData.append("f", fs.createReadStream(filePath), {
-							filename: path.basename(attachments[0].name),
-							contentType: attachments[0].type,
-						});
+						const fileSize = fs.statSync(filePath).size;
 
 						try {
-							const uploadResponse = await axios.post(
-								"https://cdn.nerimity.com/upload",
-								uploadFormData,
-								{ headers: { ...uploadFormData.getHeaders(), ...headers } }
+							const cdnTokenResponse = await axios.post(
+								`https://nerimity.com/api/channels/${channel_id}/cdn/token`, 
+								null,
+								{ headers }
 							);
-							if (uploadResponse.status === 200 && uploadResponse.data.fileId) {
-								nerimityCdnFileId = uploadResponse.data.fileId;
+							if (cdnTokenResponse.status === 200 && cdnTokenResponse.data.token) {
+								let cdnHeaders = {
+									"Authorization": `${cdnTokenResponse.data.token}`,
+									"Content-Type": attachments[0].type || "application/octet-stream",
+									"Content-Length": fileSize,
+									"File-Name": encodeURIComponent(path.basename(attachments[0].name)),
+								};
 								const attachResponse = await axios.post(
-									`https://cdn.nerimity.com/attachments/${parseInt(
-										channel_id
-									)}/${nerimityCdnFileId}`,
-									null,
-									{ headers }
+									`https://cdn.nerimity.com/attachments/${String(channel_id).trim()}`,
+									fs.createReadStream(filePath),
+									{ headers: cdnHeaders, maxBodyLength: Infinity }
 								);
 								if (
 									attachResponse.status === 200 &&
@@ -713,7 +706,7 @@ export async function send_to_nerimity(
 							} else {
 								await reportError(
 									endpoint,
-									new Error(`Failed to upload file to Nerimity CDN. Response: ${uploadResponse.status}, ${uploadResponse.statusText}`)
+									new Error(`Failed to upload file to Nerimity CDN. Response: ${cdnTokenResponse.status}, ${cdnTokenResponse.statusText}`)
 								);
 								return false;
 							}
@@ -723,7 +716,7 @@ export async function send_to_nerimity(
 						}
 					}
 				} catch (e) {
-					await reportError(endpoint, wrapError("Error uploading attachment to nerimity", e));
+					await reportError(endpoint, wrapError("Error uploading attachment to nerimity", e, ));
 					return false;
 				}
 			}
@@ -836,6 +829,8 @@ export async function send_to_revolt(
 			log("INFO", "Sent to revolt");
 			return true;
 		} catch (e) {
+			const response = axios.isAxiosError(e) ? e.response : undefined;
+			log("REQ_DEBUG", `Failed to send to revolt. URL: ${url}, Payload: ${JSON.stringify(payload)}, Headers: ${JSON.stringify(headers)}\Response: ${response?.status}, ${response?.statusText}, Body: ${JSON.stringify(response?.data)}`);
 			if (e instanceof Error) {
 				throw e;
 			}
