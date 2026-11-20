@@ -3,6 +3,7 @@ import { getTokenDb } from "./utils/surrealdb";
 import { jsonify, RecordId } from "surrealdb";
 import log from "./utils/logger";
 import { health } from "./utils/health";
+import { isDashboardSessionToken, validateDashboardSession } from "./AccessCodeHandler";
 
 async function getTokens(endpointId: bigint): Promise<Token | undefined> {
 	const db = await getTokenDb();
@@ -31,6 +32,11 @@ export function validateToken(
 	if (token === process.env.MASTER_TOKEN) {
 		log("DEBUG", `Validating master token for endpoint: ${endpointId}`);
 		return Promise.resolve(true);
+	} else if (isDashboardSessionToken(token)) {
+		log("DEBUG", `Validating dashboard session for endpoint: ${endpointId}`);
+		const valid = validateDashboardSession(endpointId, token);
+		if (!valid) health.increment("auth_errors");
+		return Promise.resolve(valid);
 	} else {
 		log("DEBUG", `Validating user token for endpoint: ${endpointId}`);
 		let tokens = getTokens(endpointId);

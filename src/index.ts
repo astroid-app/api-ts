@@ -32,6 +32,14 @@ import { addEmoji, removeEmoji, updateEmoji } from "./EmojiHandler";
 import { RecordId, StringRecordId, jsonify } from "surrealdb";
 import { migrateEndpointsFromSurrealToPostgres } from "./MigrationHandler";
 import { getErrorTraceback, expressErrorHandler } from "./ErrorHandler";
+import {
+	createAccessCode,
+	redeemAccessCode,
+	isLoginBlocked,
+	isDashboardSessionToken,
+	revokeDashboardSession,
+	revokeEndpointSessions,
+} from "./AccessCodeHandler";
 
 dotenv.config();
 installRequestLogger();
@@ -1407,6 +1415,72 @@ app.get("/optout/:userid", async (req: Request, res: Response): Promise<any> => 
 	return res.status(200).json({ optedOut: !!record?.optedOut });
 });
 
+// --- OrbitHub dashboard access-code login ---------------------------------
+// Bots (master token) request a one-time code for an endpoint; the dashboard
+// redeems it for a temporary session token that works like an endpoint token.
+
+app.post("/dashboard/accesscode", async (req: Request, res: Response): Promise<any> => {
+	const token = getRequestToken(req);
+	if (token !== MASTER_TOKEN) {
+		return res
+			.status(401)
+			.send({ message: "Unauthorized: Master token required", status: 401 });
+	}
+	const endpointId = parseId(req.body?.endpointId);
+	if (endpointId === null) {
+		return res.status(400).send({ message: "Missing or invalid endpointId", status: 400 });
+	}
+	const endpoint = await getEndpoint(endpointId);
+	if (!endpoint) {
+		return res.status(404).send({ message: "Endpoint not found", status: 404 });
+	}
+	if (await is_suspended(endpointId).catch(() => false)) {
+		return res.status(403).send({ message: "Forbidden: Endpoint is suspended", status: 403 });
+	}
+	const { code, expiresAt } = createAccessCode(endpointId);
+	health.record("dashboard:accesscode", `Access code issued for ${endpointId.toString()}`);
+	return res.status(200).json({
+		endpointId: endpointId.toString(),
+		code,
+		expiresAt: new Date(expiresAt).toISOString(),
+	});
+});
+
+app.post("/dashboard/login", async (req: Request, res: Response): Promise<any> => {
+	const ip = req.ip ?? "unknown";
+	if (isLoginBlocked(ip)) {
+		return res
+			.status(429)
+			.send({ message: "Too many failed attempts. Try again later.", status: 429 });
+	}
+	const code = req.body?.code;
+	if (typeof code !== "string" || code.trim() === "") {
+		return res.status(400).send({ message: "Missing access code", status: 400 });
+	}
+	const session = redeemAccessCode(code, ip);
+	if (!session) {
+		health.increment("auth_failures");
+		return res
+			.status(401)
+			.send({ message: "Invalid or expired access code", status: 401 });
+	}
+	health.record("dashboard:login", `Dashboard login for ${session.endpointId.toString()}`);
+	return res.status(200).json({
+		endpointId: session.endpointId.toString(),
+		token: session.token,
+		expiresAt: new Date(session.expiresAt).toISOString(),
+	});
+});
+
+app.post("/dashboard/logout", async (req: Request, res: Response): Promise<any> => {
+	const token = getRequestToken(req);
+	if (!token || !isDashboardSessionToken(token)) {
+		return res.status(400).send({ message: "Not a dashboard session token", status: 400 });
+	}
+	revokeDashboardSession(token);
+	return res.status(200).json({ message: "Logged out", status: 200 });
+});
+
 app.get("/:id", async (req: Request, res: Response): Promise<any> => {
 	const endpointId = BigInt(req.params.id);
 	log("DEBUG", `Received request for endpoint: ${endpointId} as type: ${typeof endpointId}`);
@@ -1833,6 +1907,7 @@ app.delete("/delete", async (req: Request, res: Response): Promise<any> => {
 			.status(500)
 			.send({ message: "Failed to delete endpoint", status: 500 });
 	}
+	revokeEndpointSessions(endpointId);
 	health.increment("endpoints_deleted");
 	return res
 		.status(200)

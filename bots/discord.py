@@ -13,6 +13,7 @@ from apiclient import APIClient
 load_dotenv()
 
 api_url = os.getenv("API_URL")  # Change this to your API URL
+dashboard_url = os.getenv("DASHBOARD_URL", "https://orbithub.astroid.cc").rstrip("/")
 status_url = "https://status.astroid.cc/monitor/iamup/discord-beta"
 
 
@@ -348,6 +349,7 @@ async def help(interaction: nextcord.Interaction):
     embed.add_field(name="register", value="Register you server.", inline=False)
     embed.add_field(name="delete", value="Delete your endpoint.", inline=False)
     embed.add_field(name="generate-token", value="Generate a new token for your endpoint.", inline=False)
+    embed.add_field(name="dashboard", value="Get a one-time access code for the OrbitHub dashboard.", inline=False)
     embed.add_field(name="allow", value="Allow a bot or webhook to be forwarded.", inline=False)
     embed.add_field(name="set-log", value="Setup your logchannel.", inline=False)
     embed.add_field(name="add-bridge", value="Add another channel to bridge over.\nNote: Works like `register`", inline=False)
@@ -437,6 +439,41 @@ async def gen(interaction: nextcord.Interaction):
             else:
                 error_data = await token_gen.json()
                 await interaction.edit_original_message(content=error_data.get("message"))
+
+# Slash command to get a one-time access code for the OrbitHub dashboard
+@client.slash_command(name="dashboard", default_member_permissions=8, description="Get a one-time access code to log in to the OrbitHub dashboard.")
+async def dashboard(interaction: nextcord.Interaction):
+    if interaction.guild is None:
+        return await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+    await interaction.response.send_message("Generating access code..", ephemeral=True)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{api_url}/dashboard/accesscode?token={os.getenv('MASTER_TOKEN')}",
+                                    json={"endpointId": str(interaction.guild.id)}) as r:
+                data = await r.json()
+                if r.status != 200:
+                    if r.status == 404:
+                        return await interaction.edit_original_message(content="This server is not registered yet. Use `/register` first.")
+                    return await interaction.edit_original_message(content=data.get("message", "Could not create an access code."))
+    except Exception as e:
+        print("Error creating dashboard access code:", e)
+        return await interaction.edit_original_message(content="API is not reachable. Please try again later.")
+
+    code = data["code"]
+    expires = int(datetime.datetime.fromisoformat(data["expiresAt"].replace("Z", "+00:00")).timestamp())
+    embed = nextcord.Embed(
+        title="OrbitHub Dashboard",
+        description=(
+            f"Your access code: `{code}`\n\n"
+            f"Enter it on the dashboard or use the button below.\n"
+            f"The code works **once** and expires <t:{expires}:R>.\n"
+            f"**__Do not__** share this code!"
+        ),
+        color=0x007bff,
+    )
+    view = nextcord.ui.View()
+    view.add_item(nextcord.ui.Button(label="Open dashboard", style=nextcord.ButtonStyle.link, url=f"{dashboard_url}/?code={code}"))
+    await interaction.edit_original_message(content=None, embed=embed, view=view)
 
 # Run the bot
 discord_token = os.getenv("DISCORD_TOKEN")
