@@ -18,6 +18,7 @@ import { getDb } from "./utils/pgsql";
 import log from "./utils/logger";
 import { response } from "express";
 import { reportError, wrapError } from "./ErrorHandler";
+import { incrementMessageStatistics } from "./Statistics";
 
 dotenv.config();
 
@@ -229,6 +230,10 @@ export async function distribute(
 		for (const [platform, result] of Object.entries(sendResults)) {
 			if (!result) log("ERROR", `Sending to ${platform} failed.`);
 		}
+		// Fire-and-forget so a statistics failure never blocks or fails delivery.
+		incrementMessageStatistics().catch((e) =>
+			log("ERROR", "Failed to update statistics:", e instanceof Error ? e.message : String(e))
+		);
 		let db = await getDb();
 		if (!db) {
 			await reportError(endpoint, new Error("Database not initialized"));
