@@ -53,6 +53,55 @@ export async function markRead(
 	}
 }
 
+/**
+ * Atomically claims a platform for the current message: flips meta.read.<platform>
+ * from false to true in a single UPDATE and reports whether this caller won.
+ * Unlike checkRead + markRead (read, then write later), two concurrent senders -
+ * even in different processes or on different hosts - can never both get true,
+ * so a message is posted to each platform at most once.
+ */
+export async function claimPlatform(
+	endpoint: bigint,
+	platform: (typeof possiblePlatforms)[number]
+): Promise<boolean> {
+	if (!possiblePlatforms.includes(platform)) {
+		throw new Error(`Invalid platform '${platform}'`);
+	}
+	const db = await getDb();
+	if (!db) throw new Error("Database not initialized");
+	try {
+		const { rowCount } = await db.query(
+			`UPDATE endpoints
+			    SET data = jsonb_set(data, '{meta,read,${platform}}', 'true', true)
+			  WHERE id = $1
+			    AND COALESCE(data->'meta'->'read'->>'${platform}', 'false') <> 'true'`,
+			[endpoint.toString()]
+		);
+		return (rowCount ?? 0) > 0;
+	} finally {
+		db.release();
+	}
+}
+
+/** Undoes claimPlatform after a failed send so the message can be retried. */
+export async function releasePlatform(
+	endpoint: bigint,
+	platform: (typeof possiblePlatforms)[number]
+): Promise<void> {
+	const db = await getDb();
+	if (!db) return;
+	try {
+		await db.query(
+			`UPDATE endpoints SET data = jsonb_set(data, '{meta,read,${platform}}', 'false', true) WHERE id = $1`,
+			[endpoint.toString()]
+		);
+	} catch (error) {
+		log("ERROR", `Error releasing ${platform} claim for endpoint '${endpoint}': ${error}`);
+	} finally {
+		db.release();
+	}
+}
+
 export async function checkRead(
 	endpoint: bigint,
 	platform: Platform = "all"

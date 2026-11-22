@@ -10,7 +10,7 @@ import {
 	clearTemporaryAttachments,
 } from "./AttachmentProcessor";
 import { Attachment } from "./types/Attachment";
-import { markRead, checkRead } from "./ReadHandler";
+import { claimPlatform, releasePlatform } from "./ReadHandler";
 import { convertMessage } from "./EmojiHandler";
 import * as dotenv from "dotenv";
 import { Endpoint } from "./types/Endpoint";
@@ -396,10 +396,11 @@ export async function send_to_discord(
 	attachments: Attachment[] | null = null
 ) {
 	if (updated_json.config.channels.discord.length === 0) return true;
+	let claimed = false;
 	try {
-		const read_discord = await checkRead(endpoint, "discord");
-		log("DEBUG", `Discord read status: ${read_discord}`);
-		if (!read_discord) {
+		claimed = await claimPlatform(endpoint, "discord");
+		log("DEBUG", `Discord claimed by this sender: ${claimed}`);
+		if (claimed) {
 			let webhook: string;
 			try {
 				let senderChannel: string;
@@ -509,7 +510,7 @@ export async function send_to_discord(
 					file.destroy();
 				}
 			}
-			await markRead(endpoint, "discord");
+			claimed = false; // sent - keep the claim even if a later step throws
 			log("INFO", "Sent to discord");
 			if (response.id) {
 				return true;
@@ -522,6 +523,7 @@ export async function send_to_discord(
 			return true;
 		}
 	} catch (e) {
+		if (claimed) await releasePlatform(endpoint, "discord");
 		throw wrapError("Failed to send to Discord", e);
 	}
 }
@@ -541,9 +543,10 @@ export async function send_to_nerimity(
 ) {
 	log("DEBUG", "Sending to nerimity");
 	if (updated_json.config.channels.nerimity.length === 0) return true;
+	let claimed = false;
 	try {
-		const read_nerimity = await checkRead(endpoint, "nerimity");
-		if (!read_nerimity) {
+		claimed = await claimPlatform(endpoint, "nerimity");
+		if (claimed) {
 			const response_json = updated_json;
 			let sender_channel = response_json.meta.message["sender-channel"] ?? "";
 			const discord_channels = response_json.config.channels.discord;
@@ -734,14 +737,15 @@ export async function send_to_nerimity(
 				);
 				return false;
 			}
-			await markRead(endpoint, "nerimity");
-			console.log("Sent to nerimity");
+			claimed = false; // sent - keep the claim
+			log("INFO", "Sent to nerimity");
 			return true;
 		} else {
 			log("DEBUG", "Skipping send_to_nerimity: already sent for this message");
 			return true;
 		}
 	} catch (e: any) {
+		if (claimed) await releasePlatform(endpoint, "nerimity");
 		if (e.isAxiosError && e.response) {
 			throw wrapError(
 				`Failed to send to Nerimity: Status ${e.response.status}, ${e.response.statusText
@@ -759,8 +763,8 @@ export async function send_to_revolt(
 	endpoint: bigint,
 	attachments: Attachment[] | null = null
 ) {
-	if (updated_json.meta.read.revolt === false) {
-		if (updated_json.config.channels.revolt.length === 0) return true;
+	if (updated_json.config.channels.revolt.length === 0) return true;
+	if (await claimPlatform(endpoint, "revolt")) {
 		log("DEBUG", "Sending to revolt");
 		let channel_id: string;
 		try {
@@ -827,10 +831,9 @@ export async function send_to_revolt(
 				`Sent to revolt. Response: ${axiosResponse.status}, ${axiosResponse.statusText
 				} ${JSON.stringify(axiosResponse.data)}`
 			);
-			await markRead(endpoint, "revolt");
-			log("INFO", "Sent to revolt");
 			return true;
 		} catch (e) {
+			await releasePlatform(endpoint, "revolt");
 			const response = axios.isAxiosError(e) ? e.response : undefined;
 			log("REQ_DEBUG", `Failed to send to revolt. URL: ${url}, Payload: ${JSON.stringify(payload)}, Headers: ${JSON.stringify(headers)}\Response: ${response?.status}, ${response?.statusText}, Body: ${JSON.stringify(response?.data)}`);
 			if (e instanceof Error) {
@@ -839,7 +842,7 @@ export async function send_to_revolt(
 			throw wrapError(formatSendError(e), e);
 		}
 	} else {
-		log("DEBUG", "Skipping send_to_revolt because meta.read.revolt is already true");
+		log("DEBUG", "Skipping send_to_revolt: already claimed by another sender");
 		return true;
 	}
 }
