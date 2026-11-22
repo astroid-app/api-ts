@@ -43,11 +43,13 @@ async def on_message_created(message: nerimity.Message):
         return
 
     try:
-        if str(message.author.id) in ["1528027225549611008", "1570083374897479680"]:
-            return
 
         config_data = await api_client.get(f"{endpoint}")
         if "config" not in config_data:
+            return
+
+        allowd_ids = config_data["config"].get("allowed_ids")
+        if message.author.bot and not (allowd_ids and str(message.author.id) in allowd_ids):
             return
 
         is_beta = config_data["config"].get("isbeta")

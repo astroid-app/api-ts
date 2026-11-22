@@ -47,9 +47,13 @@ async function dequeue(endpointId: bigint): Promise<Endpoint | undefined> {
 		const { rows } = await db.query(
 			`UPDATE endpoints
 			    SET data = jsonb_set(
-			        jsonb_set(data, '{meta,message}', data->'meta'->'_message_cache'->0),
-			        '{meta,_message_cache}',
-			        (data->'meta'->'_message_cache') - 0)
+			        jsonb_set(
+			            jsonb_set(data, '{meta,message}', data->'meta'->'_message_cache'->0),
+			            '{meta,_message_cache}',
+			            (data->'meta'->'_message_cache') - 0),
+			        '{meta,read}',
+			        '{"discord": false, "guilded": false, "nerimity": false, "revolt": false}'::jsonb,
+			        true)
 			  WHERE id = $1
 			    AND jsonb_typeof(data->'meta'->'_message_cache') = 'array'
 			    AND jsonb_array_length(data->'meta'->'_message_cache') > 0
@@ -206,6 +210,18 @@ if (isMainThread) {
 				} else {
 					skippedEndpoints[endpointId] = 1;
 				}
+				// Cross-process lock: if another API instance shares this database,
+				// only one of them may process a given endpoint at a time. Without
+				// this, a second instance sees the in-flight meta.message and sends
+				// it again (duplicate messages, one log line per instance).
+				const { rows: lockRows } = await db.query(
+					"SELECT pg_try_advisory_lock($1::bigint) AS locked",
+					[endpointId]
+				);
+				if (!lockRows[0]?.locked) {
+					log("DEBUG", `Endpoint ${endpointId} is being processed by another instance, skipping`);
+					continue;
+				}
 				try {
 					health.record("queue:process", `Process endpoint ${endpointId}`);
 					await processMessageQueue(BigInt(endpointId));
@@ -213,6 +229,8 @@ if (isMainThread) {
 				} catch (error) {
 					log("ERROR", `Error processing queue for ${endpointId}:`, error);
 					health.record("queue:error", `Error processing ${endpointId}`, { error: String(error) });
+				} finally {
+					await db.query("SELECT pg_advisory_unlock($1::bigint)", [endpointId]);
 				}
 			}
 		} finally {

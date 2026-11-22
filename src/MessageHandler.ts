@@ -469,18 +469,13 @@ export async function send_to_discord(
 				"discord",
 				endpoint
 			);
-			let webhookClient: discord.WebhookClient;
-			if (updated_json.config.isbeta) {
-				webhookClient = new discord.WebhookClient({
-					url: webhook,
-					token: process.env.BETA_DISCORD_TOKEN,
-				});
-			} else {
-				webhookClient = new discord.WebhookClient({
-					url: webhook,
-					token: process.env.DISCORD_TOKEN,
-				});
-			}
+			// Webhook executes are not idempotent: discord.js by default silently
+			// retries on timeout/ECONNRESET/5xx even when Discord already created
+			// the message, which posts it twice. Disable retries for sends.
+			const webhookClient = new discord.WebhookClient(
+				{ url: webhook },
+				{ rest: { retries: 0, timeout: 30_000 } }
+			);
 			let message_content = updated_json.meta.message.content;
 			if (
 				message_content === null ||
@@ -523,7 +518,8 @@ export async function send_to_discord(
 				return false;
 			}
 		} else {
-			return false;
+			log("DEBUG", "Skipping send_to_discord: already sent for this message");
+			return true;
 		}
 	} catch (e) {
 		throw wrapError("Failed to send to Discord", e);
@@ -742,7 +738,8 @@ export async function send_to_nerimity(
 			console.log("Sent to nerimity");
 			return true;
 		} else {
-			return false;
+			log("DEBUG", "Skipping send_to_nerimity: already sent for this message");
+			return true;
 		}
 	} catch (e: any) {
 		if (e.isAxiosError && e.response) {

@@ -62,7 +62,7 @@ export async function checkRead(
 		if (!db) throw new Error("Database not initialized");
 
 		const { rows } = await db.query(
-			"SELECT data->'meta' AS meta FROM endpoints WHERE id = $1",
+			"SELECT data->'meta'->'read' AS read FROM endpoints WHERE id = $1",
 			[endpoint.toString()]
 		);
 
@@ -75,14 +75,12 @@ export async function checkRead(
 		}
 		if (rows.length === 0) {
 			log("ERROR", `Endpoint '${endpoint}' not found`);
-			await db.release();
 			return false;
 		}
 
 		const read = rows[0].read;
 		if (platform !== "all") {
 			if (!possiblePlatforms.includes(platform as any)) {
-				await db.release();
 				log("ERROR", `Invalid platform '${platform}'`);
 				return false;
 			}
