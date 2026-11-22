@@ -1,6 +1,7 @@
 import { getDb } from "./utils/pgsql";
 import { getTokenDb } from "./utils/surrealdb";
 import { RecordId } from "surrealdb";
+import { deleteEndpointStatistics } from "./Statistics";
 
 export async function deleteEndpointAndToken(endpointId: bigint): Promise<boolean> {
     const db = await getDb();
@@ -14,6 +15,8 @@ export async function deleteEndpointAndToken(endpointId: bigint): Promise<boolea
     if (!tokenDb) return false;
     await tokenDb.delete(new RecordId("tokens", endpointId));
     await tokenDb.close();
+    // Statistics are best-effort; never fail the deletion because of them.
+    await deleteEndpointStatistics(endpointId).catch(() => {});
     return true;
 }
 

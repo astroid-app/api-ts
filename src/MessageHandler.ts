@@ -231,7 +231,7 @@ export async function distribute(
 			if (!result) log("ERROR", `Sending to ${platform} failed.`);
 		}
 		// Fire-and-forget so a statistics failure never blocks or fails delivery.
-		incrementMessageStatistics().catch((e) =>
+		incrementMessageStatistics(endpoint, updated_json.meta.message.sender).catch((e) =>
 			log("ERROR", "Failed to update statistics:", e instanceof Error ? e.message : String(e))
 		);
 		let db = await getDb();

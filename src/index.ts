@@ -11,7 +11,7 @@ import {
 } from "./UpdateEndpointConfig";
 import { validateConfig } from "./types/ConfigKeys";
 import cors from "cors";
-import { roundStatistics } from "./Statistics";
+import { roundStatistics, getEndpointStatistics } from "./Statistics";
 import { is_suspended } from "./SuspensionHandler";
 import { getDb } from "./utils/pgsql";
 import "./QueueProcessor";
@@ -1522,6 +1522,35 @@ app.get("/:id", async (req: Request, res: Response): Promise<any> => {
 			log("ERROR", err);
 			res.status(500).send({ message: "Internal Server Error", status: 500 });
 		});
+});
+
+app.get("/:id/statistics", async (req: Request, res: Response): Promise<any> => {
+	let endpointId: bigint;
+	try {
+		endpointId = BigInt(req.params.id);
+	} catch {
+		return res.status(400).send({ message: "Bad Request: Invalid endpoint id", status: 400 });
+	}
+	const token = req.query.token as string;
+	if (!token) {
+		return res
+			.status(401)
+			.send({ message: "Unauthorized: No token provided", status: 401 });
+	}
+	if (!(await validateToken(endpointId, token))) {
+		health.increment("auth_failures");
+		return res
+			.status(401)
+			.send({ message: "Unauthorized: Invalid token", status: 401 });
+	}
+	try {
+		const stats = await getEndpointStatistics(endpointId);
+		health.record("stats", `Fetched statistics for ${endpointId.toString()}`);
+		return res.status(200).json(stats);
+	} catch (err) {
+		log("ERROR", `Error fetching statistics for ${endpointId.toString()}:`, err);
+		return res.status(500).send({ message: "Internal Server Error", status: 500 });
+	}
 });
 
 app.post("/:id/config", async (req: Request, res: Response): Promise<any> => {
