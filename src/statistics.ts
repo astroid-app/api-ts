@@ -1,13 +1,26 @@
 import { getDb } from "./utils/surrealdb";
+import { getDb as getPgDb } from "./utils/pgsql";
 import { RecordId, jsonify} from "surrealdb";
+import log from "./utils/logger";
+
+async function countEndpoints(): Promise<number> {
+    const pg = await getPgDb();
+    try {
+        const { rows } = await pg.query("SELECT COUNT(*)::int AS total FROM endpoints");
+        return Number(rows[0]?.total ?? 0);
+    } finally {
+        pg.release();
+    }
+}
 
 export async function roundStatistics(): Promise<any> {
 
     const db = await getDb();
     try {
-        const result = await db.select(new RecordId("statistics", "messages"));
-        const endpointResult = await db.select("endpoints");
-        const jsonEndpointResult = jsonify(endpointResult) as any[];
+        const [result, endpoints] = await Promise.all([
+            db.select(new RecordId("statistics", "messages")),
+            countEndpoints(),
+        ]);
         const jsonresult = jsonify(result) as Record<string, any>;
 
         const totalMessages = Number(jsonresult?.total ?? 0);
@@ -15,10 +28,6 @@ export async function roundStatistics(): Promise<any> {
 
         const totalMessagesRounded = round(totalMessages);
         const monthlyMasagesRounded = round(monthlyMasages);
-
-        const endpoints = Array.isArray(jsonEndpointResult)
-            ? jsonEndpointResult.length
-            : 0;
 
         const stats = {
             messages: {
@@ -54,9 +63,13 @@ export async function incrementMessageStatistics(increment: number = 1): Promise
                 CREATE statistics:messages SET total = 0, month = 0, periodStart = time::unix($now);
             };
             LET $start = (SELECT VALUE periodStart FROM statistics:messages)[0];
-            LET $reset = $start = NONE OR $start = NULL
-                OR time::year(time::from::unix(<int> $start)) != time::year($now)
-                OR time::month(time::from::unix(<int> $start)) != time::month($now);
+            -- periodStart may be a float (older writers stored fractional
+            -- seconds); a bare <int> cast of a fractional float throws and
+            -- aborts the whole transaction, so floor it first.
+            LET $reset = IF type::is::number($start) THEN
+                    time::year(time::from::unix(<int> math::floor($start))) != time::year($now)
+                    OR time::month(time::from::unix(<int> math::floor($start))) != time::month($now)
+                ELSE true END;
             UPDATE statistics:messages SET
                 month = IF $reset THEN $inc ELSE (month ?? 0) + $inc END,
                 periodStart = IF $reset THEN time::unix($now) ELSE periodStart END,
@@ -64,6 +77,9 @@ export async function incrementMessageStatistics(increment: number = 1): Promise
             COMMIT TRANSACTION;`,
             { inc: increment }
         );
+    } catch (err) {
+        log("ERROR", "Failed to increment message statistics:", err instanceof Error ? err.message : String(err));
+        throw err;
     } finally {
         await db.close();
     }
