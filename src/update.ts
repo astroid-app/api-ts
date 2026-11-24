@@ -11,9 +11,7 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const EXCLUDED_PATHS = new Set([
 	".env",
 	".gitignore",
-	"package.json",
 	"package-lock.json",
-	"tsconfig.json",
 ]);
 
 function isExcluded(filePath: string): boolean {
@@ -32,6 +30,49 @@ function hasLocalChanges(filePath: string): boolean {
 	return git(["status", "--porcelain", "--", filePath]).length > 0;
 }
 
+function tryGit(args: string[]): boolean {
+	try {
+		execFileSync("git", args, { cwd: REPO_ROOT, stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function listLines(raw: string): string[] {
+	return raw.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+function hasStagedChanges(): boolean {
+	// `git diff --cached --quiet` exits non-zero when something is staged
+	return !tryGit(["diff", "--cached", "--quiet"]);
+}
+
+function isMergeInProgress(): boolean {
+	return tryGit(["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+}
+
+// Leftover conflicts (e.g. from an earlier failed `git pull`) block every
+// commit, so resolve them first: config files keep the local version,
+// everything else takes the upstream version.
+function resolveConflicts(remoteHead: string): string[] {
+	const unmerged = listLines(git(["diff", "--name-only", "--diff-filter=U"]));
+	for (const file of unmerged) {
+		if (isExcluded(file)) {
+			if (tryGit(["checkout", "--ours", "--", file]) || tryGit(["checkout", "--theirs", "--", file])) {
+				git(["add", "--", file]);
+			} else {
+				git(["rm", "-f", "--", file]);
+			}
+		} else if (tryGit(["cat-file", "-e", `${remoteHead}:${file}`])) {
+			git(["checkout", remoteHead, "--", file]);
+		} else {
+			git(["rm", "-f", "--", file]);
+		}
+	}
+	return unmerged;
+}
+
 type DiffEntry = { status: string; file: string };
 
 function parseDiff(raw: string): DiffEntry[] {
@@ -45,23 +86,18 @@ function parseDiff(raw: string): DiffEntry[] {
 		});
 }
 
-export type UpdateOptions = {
-	// Overwrite files that have local changes instead of skipping them.
-	// Excluded config files are still never touched.
-	force?: boolean;
-};
-
 export type UpdateResult = {
 	upToDate: boolean;
 	updated: string[];
 	deleted: string[];
 	skippedExcluded: string[];
-	skippedLocalChanges: string[];
-	forcedOverLocalChanges: string[];
+	// Files that had unresolved merge conflicts before the update
+	resolvedConflicts: string[];
+	// Files whose local modifications were overwritten by the upstream version
+	overwrittenLocalChanges: string[];
 };
 
-export async function runUpdate(options: UpdateOptions = {}): Promise<UpdateResult> {
-	const { force = false } = options;
+export async function runUpdate(): Promise<UpdateResult> {
 	const branch = getCurrentBranch();
 	log("INFO", `Fetching latest changes from ${REPO_URL} (${REMOTE}/${branch})`);
 	git(["fetch", REMOTE, branch]);
@@ -69,15 +105,20 @@ export async function runUpdate(options: UpdateOptions = {}): Promise<UpdateResu
 	const currentHead = git(["rev-parse", "HEAD"]);
 	const remoteHead = git(["rev-parse", `${REMOTE}/${branch}`]);
 
-	if (currentHead === remoteHead) {
+	const resolvedConflicts = resolveConflicts(remoteHead);
+	if (resolvedConflicts.length > 0) {
+		log("WARN", `Resolved leftover merge conflicts in: ${resolvedConflicts.join(", ")}`);
+	}
+
+	if (currentHead === remoteHead && resolvedConflicts.length === 0 && !isMergeInProgress()) {
 		log("INFO", "Already up to date.");
 		return {
 			upToDate: true,
 			updated: [],
 			deleted: [],
 			skippedExcluded: [],
-			skippedLocalChanges: [],
-			forcedOverLocalChanges: [],
+			resolvedConflicts: [],
+			overwrittenLocalChanges: [],
 		};
 	}
 
@@ -88,8 +129,7 @@ export async function runUpdate(options: UpdateOptions = {}): Promise<UpdateResu
 	const updated: string[] = [];
 	const deleted: string[] = [];
 	const skippedExcluded: string[] = [];
-	const skippedLocalChanges: string[] = [];
-	const forcedOverLocalChanges: string[] = [];
+	const overwrittenLocalChanges: string[] = [];
 
 	for (const { status, file } of diff) {
 		if (isExcluded(file)) {
@@ -97,58 +137,49 @@ export async function runUpdate(options: UpdateOptions = {}): Promise<UpdateResu
 			continue;
 		}
 
-		const dirty = hasLocalChanges(file);
-		if (dirty) {
-			if (!force) {
-				skippedLocalChanges.push(file);
-				continue;
-			}
-			forcedOverLocalChanges.push(file);
+		// Only config files (EXCLUDED_PATHS) are protected; everything else
+		// gets the upstream version even if it was modified locally.
+		if (hasLocalChanges(file)) {
+			overwrittenLocalChanges.push(file);
 		}
 
 		if (status === "D") {
 			git(["rm", "-f", "--", file]);
 			deleted.push(file);
 		} else {
-			// `git checkout <ref> -- <path>` always overwrites the working-tree
-			// copy of that path, dirty or not - the hasLocalChanges() check
-			// above is what actually gates this, not any flag here.
+			// `git checkout <ref> -- <path>` overwrites the working-tree copy
+			// of that path, dirty or not.
 			git(["checkout", remoteHead, "--", file]);
 			updated.push(file);
 		}
 	}
 
-	if (updated.length > 0 || deleted.length > 0) {
+	// A merge left in progress must be concluded with a commit even if
+	// nothing new is staged.
+	if (hasStagedChanges() || isMergeInProgress()) {
 		git([
 			"commit",
 			"-m",
-			`Auto-update from ${REMOTE}/${branch} (${remoteHead.slice(0, 7)})${force ? " [forced]" : ""}`,
+			`Auto-update from ${REMOTE}/${branch} (${remoteHead.slice(0, 7)})`,
 		]);
 	}
 
 	log(
 		"SUCCESS",
-		`Update complete. Updated ${updated.length}, deleted ${deleted.length}, skipped ${skippedExcluded.length} excluded, skipped ${skippedLocalChanges.length} with local changes.`
+		`Update complete. Updated ${updated.length}, deleted ${deleted.length}, skipped ${skippedExcluded.length} excluded config files.`
 	);
-	if (skippedLocalChanges.length > 0) {
+	if (overwrittenLocalChanges.length > 0) {
 		log(
 			"WARN",
-			`These changed upstream but were left alone due to local modifications: ${skippedLocalChanges.join(", ")}`
-		);
-	}
-	if (forcedOverLocalChanges.length > 0) {
-		log(
-			"WARN",
-			`--force was set: discarded local modifications to these files to apply the upstream version: ${forcedOverLocalChanges.join(", ")}`
+			`Discarded local modifications to apply the upstream version: ${overwrittenLocalChanges.join(", ")}`
 		);
 	}
 
-	return { upToDate: false, updated, deleted, skippedExcluded, skippedLocalChanges, forcedOverLocalChanges };
+	return { upToDate: false, updated, deleted, skippedExcluded, resolvedConflicts, overwrittenLocalChanges };
 }
 
 if (require.main === module) {
-	const force = process.argv.includes("--force");
-	runUpdate({ force })
+	runUpdate()
 		.then((result) => {
 			console.log(JSON.stringify(result, null, 2));
 		})
