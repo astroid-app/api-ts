@@ -1258,15 +1258,47 @@ app.post("/contribution/addcontributor/:id", async (req: Request, res: Response)
 
 	const id = parseId(req.params.id);
 	if (id === null) return res.status(400).json({ message: "Invalid id." });
-	const username = req.body.username as string | undefined;
-	const avatar = req.body.avatar as string | undefined;
+	// The manager bot sends these as query params; accept a JSON body too.
+	const pick = (key: string): string | undefined => {
+		const value = req.query[key] ?? req.body?.[key];
+		return typeof value === "string" && value !== "" ? value : undefined;
+	};
+	const data: Record<string, unknown> = {};
+	const username = pick("username");
+	const avatar = pick("avatar");
+	if (username !== undefined) data.username = username;
+	if (avatar !== undefined) data.avatar = avatar;
 
 	const db = await getSurrealDb();
 	try {
 		const recordId = new RecordId("contributors", id);
-		await db.create(recordId, { username, avatar }).catch(async () => {
-			await db.merge(recordId, { username, avatar });
-		});
+		const existing = (await db.select(recordId)) as any;
+
+		// The old Python API stored contributors under malformed string keys
+		// like `contributors:⟨469559349275131904⟩`` ` - fold those into the
+		// numeric record so each contributor exists only once.
+		const all = ((await db.select("contributors")) as any[]) ?? [];
+		const legacy = all.filter(
+			(r) => typeof r?.id?.id === "string" && r.id.id.replace(/\D/g, "") === id.toString()
+		);
+		for (const old of legacy) {
+			if (data.username === undefined && old.username) data.username = old.username;
+			if (data.avatar === undefined && old.avatar) data.avatar = old.avatar;
+		}
+
+		data.contributor_since =
+			existing?.contributor_since ??
+			legacy.find((r) => r.contributor_since != null)?.contributor_since ??
+			Date.now() / 1000;
+
+		if (existing) {
+			await db.merge(recordId, data);
+		} else {
+			await db.create(recordId, data);
+		}
+		for (const old of legacy) {
+			await db.delete(old.id);
+		}
 		const updated = await db.select(recordId);
 		return res.status(200).json(jsonify(updated));
 	} catch (e) {
