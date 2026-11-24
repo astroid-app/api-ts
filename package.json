@@ -14,7 +14,7 @@
   "author": "isapropanol",
   "license": "AGPL-3.0",
   "dependencies": {
-    "@sentry/node": "^9.8.0",
+    "@sentry/node": "^11.17.0",
     "@types/express": "^5.0.1",
     "axios": "^1.10.0",
     "cors": "^2.8.5",
