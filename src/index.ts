@@ -1266,8 +1266,10 @@ app.post("/contribution/addcontributor/:id", async (req: Request, res: Response)
 	const data: Record<string, unknown> = {};
 	const username = pick("username");
 	const avatar = pick("avatar");
+	const banner = pick("banner");
 	if (username !== undefined) data.username = username;
 	if (avatar !== undefined) data.avatar = avatar;
+	if (banner !== undefined) data.banner = banner;
 
 	const db = await getSurrealDb();
 	try {
@@ -1284,6 +1286,7 @@ app.post("/contribution/addcontributor/:id", async (req: Request, res: Response)
 		for (const old of legacy) {
 			if (data.username === undefined && old.username) data.username = old.username;
 			if (data.avatar === undefined && old.avatar) data.avatar = old.avatar;
+			if (data.banner === undefined && old.banner) data.banner = old.banner;
 		}
 
 		data.contributor_since =
